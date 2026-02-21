@@ -1,0 +1,84 @@
+# Cursor Rules for TypeScript VSCode Extension
+
+## Code Style & Formatting
+
+### Indentation
+- **CRITICAL**: This project uses TABS for indentation, not spaces
+- Always preserve existing indentation when editing files
+- Do not convert tabs to spaces or spaces to tabs
+- Use tabs consistently across all TypeScript, JavaScript, and JSON files
+- When making changes, maintain the exact indentation style of the surrounding code
+
+### TypeScript Best Practices
+- Use strict TypeScript settings
+- Prefer `const` over `let`, avoid `var`
+- Use explicit return types for functions
+- Prefer interfaces over type aliases for object shapes
+- Use `readonly` for properties that shouldn't be mutated
+- Avoid `any` type - use `unknown` or proper typing instead
+- Use optional chaining (`?.`) and nullish coalescing (`??`) operators
+- Prefer async/await over raw Promises
+- Use type guards for narrowing types
+
+### Code Organization
+- Keep functions small and focused on a single responsibility
+- Group related functionality together
+- Export only what's needed - prefer private by default
+- Use barrel exports (index.ts) for cleaner imports
+- Follow the existing project structure
+
+### Error Handling
+- Always handle errors explicitly
+- Use try-catch blocks for async operations
+- Provide meaningful error messages
+- Log errors appropriately for debugging
+
+### VSCode Extension Specific
+- Follow VSCode extension API guidelines
+- Dispose of resources properly (subscriptions, disposables)
+- Use VSCode's built-in APIs instead of external libraries when possible
+- Test extension activation and commands thoroughly
+- Keep extension size minimal - avoid unnecessary dependencies
+
+### Comments
+- Avoid obvious comments that just describe what the code does
+- Write comments to explain WHY, not WHAT
+- Document complex algorithms or business logic
+- Use JSDoc for public APIs and exported functions
+- Keep comments up-to-date with code changes
+
+### Naming Conventions
+- Use camelCase for variables and functions
+- Use PascalCase for classes, interfaces, and types
+- Use UPPER_CASE for constants
+- Use descriptive names that clearly indicate purpose
+- Prefix private members with underscore (_) when appropriate
+
+### Imports
+- Group imports: external libraries, then internal modules
+- Remove unused imports
+- Use absolute paths from src root when configured
+- Keep imports organized and readable
+
+### Dependencies
+- This project uses npm (not bun or yarn)
+- Keep dependencies up to date
+- Minimize external dependencies
+- Prefer well-maintained packages
+
+## VSCode API Version
+- Minimum required VSCode version: 1.76.0
+- Use APIs compatible with this version
+- Check VSCode API documentation for feature availability
+
+## Build & Compilation
+- Use `npm run compile:debug` for development builds
+- Use `npm run build` for production builds
+- Always run TypeScript compiler checks before committing
+- Fix all TypeScript errors - do not ignore or suppress them
+
+## Git Workflow
+- Keep commits focused and atomic
+- Write clear, descriptive commit messages
+- Test changes before committing
+- Run `npm run prepush` before pushing changes
