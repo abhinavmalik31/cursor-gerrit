@@ -207,15 +207,24 @@ export async function openChangeSelector(
 			text: `$(loading~spin) Checking out #${change.changeId}`,
 			tooltip: `Checking out change #${change.changeId}`,
 		});
-		await gitCheckoutRemote(gerritRepo, change.changeId);
+		const success = await gitCheckoutRemote(gerritRepo, change.changeId);
+		statusBar.setOverride(null);
+		if (success) {
+			void window.showInformationMessage(
+				`Successfully checked out change #${change.changeId}`
+			);
+		}
 	} else {
 		statusBar.setOverride({
 			text: `$(loading~spin) Checking out ${change.branchName}`,
 			tooltip: `Checking out branch ${change.branchName}`,
 		});
 		await gitCheckoutBranch(gerritRepo, change.branchName);
+		statusBar.setOverride(null);
+		void window.showInformationMessage(
+			`Successfully checked out branch ${change.branchName}`
+		);
 	}
-	statusBar.setOverride(null);
 }
 
 async function gitCheckoutBranch(

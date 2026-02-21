@@ -12,7 +12,6 @@ import {
 	ProgressLocation,
 } from 'vscode';
 import {
-	execAndMonitor,
 	getLastCommits,
 	GitCommit,
 	tryExecAsync,
@@ -25,9 +24,11 @@ import { Repository } from '../../types/vscode-extension-git';
 import { createAwaitingInterval, wait } from '../util/util';
 import { getConfiguration } from '../vscode/config';
 import { VersionNumber } from '../util/version';
-import { getCurrentChangeID } from './commit';
+import { getCurrentChangeID, isGerritCommit } from './commit';
 import { log } from '../util/log';
 import { rebase } from './rebase';
+import { getAPI } from '../gerrit/gerritAPI';
+import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 
 export async function onChangeLastCommit(
 	gerritRepo: Repository,
@@ -321,6 +322,110 @@ export function getChangeIDFromCheckoutString(
 	return idFromTriplet ?? idFromPair;
 }
 
+/**
+ * Checkout a Gerrit change using standard git commands (no git-review required)
+ * @param changeNumber The change number (e.g., 457552)
+ * @param patchSet Optional patchset number (defaults to latest from API)
+ * @param remote The git remote name (defaults to 'origin')
+ * @param cwd Working directory
+ * @returns Promise<{success: boolean, stdout: string, stderr: string}>
+ */
+export async function gitFetchAndCheckoutChange(
+	changeNumber: number | string,
+	patchSet: number | 'latest' = 'latest',
+	remote: string = 'origin',
+	cwd: string
+): Promise<{ success: boolean; stdout: string; stderr: string }> {
+	const changeNum = String(changeNumber);
+	const last2Digits = changeNum.slice(-2);
+
+	// Gerrit stores refs as: refs/changes/XX/NNNNN/P
+	// where XX = last 2 digits, NNNNN = change number, P = patchset
+	let patchSetNum: number;
+
+	if (patchSet === 'latest' || patchSet === undefined) {
+		// Use Gerrit API to get the latest patchset number
+		log(`Getting latest patchset for change ${changeNum} from API`);
+		const api = await getAPI();
+		if (!api) {
+			return {
+				success: false,
+				stdout: '',
+				stderr: 'Failed to get Gerrit API',
+			};
+		}
+
+		try {
+			// Import GerritChange to use getChangeOnce
+			const { GerritChange } = await import('../gerrit/gerritAPI/gerritChange');
+			const change = await GerritChange.getChangeOnce(
+				changeNum,
+				[GerritAPIWith.CURRENT_REVISION]
+			);
+			if (!change) {
+				return {
+					success: false,
+					stdout: '',
+					stderr: `Change ${changeNum} not found`,
+				};
+			}
+
+			// Get current revision
+			const currentRevision = await change.getCurrentRevision();
+			if (!currentRevision) {
+				return {
+					success: false,
+					stdout: '',
+					stderr: `No current revision found for change ${changeNum}`,
+				};
+			}
+
+			patchSetNum = currentRevision.number;
+			log(`Latest patchset for change ${changeNum} is ${patchSetNum}`);
+		} catch (error) {
+			return {
+				success: false,
+				stdout: '',
+				stderr: `Failed to get change info: ${(error as Error).message}`,
+			};
+		}
+	} else {
+		patchSetNum = patchSet;
+	}
+
+	const refspec = `refs/changes/${last2Digits}/${changeNum}/${patchSetNum}`;
+	log(`Fetching change ${changeNum} patchset ${patchSetNum} from ${remote}`);
+
+	// Fetch the change
+	const fetchResult = await tryExecAsync(
+		`git fetch ${remote} ${refspec}`,
+		{ cwd }
+	);
+
+	if (!fetchResult.success) {
+		log(`Failed to fetch change: ${fetchResult.stderr}`);
+		return fetchResult;
+	}
+
+	// Checkout FETCH_HEAD (the fetched change)
+	const checkoutResult = await tryExecAsync(
+		'git checkout FETCH_HEAD',
+		{ cwd }
+	);
+
+	if (!checkoutResult.success) {
+		log(`Failed to checkout change: ${checkoutResult.stderr}`);
+		return checkoutResult;
+	}
+
+	log(`Successfully checked out change ${changeNum} patchset ${patchSetNum}`);
+	return {
+		success: true,
+		stdout: fetchResult.stdout + '\n' + checkoutResult.stdout,
+		stderr: fetchResult.stderr + '\n' + checkoutResult.stderr,
+	};
+}
+
 export async function gitCheckoutRemote(
 	gerritRepo: Repository,
 	patchNumberOrChangeID: number | string,
@@ -332,23 +437,20 @@ export async function gitCheckoutRemote(
 		return false;
 	}
 
-	let changeString =
-		getChangeIDFromCheckoutString(patchNumberOrChangeID) ??
-		patchNumberOrChangeID;
-	if (patchSet) {
-		changeString += `/${patchSet}`;
-	}
-	const { success } = await tryExecAsync(`git-review -d "${changeString}"`, {
-		cwd: uri,
-		timeout: 10000,
-	});
+	const changeNum = getChangeIDFromCheckoutString(patchNumberOrChangeID);
+	const result = await gitFetchAndCheckoutChange(
+		changeNum,
+		patchSet ?? 'latest',
+		'origin',
+		uri
+	);
 
-	if (!success) {
+	if (!result.success) {
 		void window.showErrorMessage(
 			'Checkout failed. Please see log for more details'
 		);
 	}
-	return success;
+	return result.success;
 }
 
 const URL_REGEX = /http(s)?[:\w./+]+/g;
@@ -389,86 +491,70 @@ export async function gitReview(gerritRepo: Repository): Promise<void> {
 			progress.report({
 				message: 'Pushing for review',
 			});
-			const result = await new Promise<{
-				success: boolean;
-				stdout: string;
-				handled: boolean;
-			}>((resolve) => {
-				const pushForReviewArgs = config.get(
-					'gerrit.pushForReviewArgs',
-					[]
+
+			// Get target branch from git review file
+			const gitReviewFile = await getGitReviewFileCached(gerritRepo);
+			if (!gitReviewFile) {
+				void window.showErrorMessage(
+					'Failed to get git review file configuration'
 				);
-				void execAndMonitor(
-					'git-review',
-					async (stdout, proc) => {
-						if (
-							!stdout.includes(
-								'You are about to submit multiple commits.'
-							)
-						) {
-							return resolve({
-								success: true,
-								stdout: stdout,
-								handled: true,
-							});
-						}
+				return {
+					success: false,
+					handled: true,
+					stdout: '',
+				};
+			}
 
-						proc.kill();
-						const YES_OPTION = 'Yes';
-						const CANCEL_OPTION = 'Cancel';
-						const choice = await window.showInformationMessage(
-							'You are about to submit multiple commits, are you sure?',
-							YES_OPTION,
-							CANCEL_OPTION
-						);
+			const targetBranch =
+				gitReviewFile.branch ??
+				gitReviewFile.defaultbranch ??
+				DEFAULT_GIT_REVIEW_FILE.defaultbranch;
 
-						if (choice === YES_OPTION) {
-							const result = await tryExecAsync(
-								`git-review -y ${pushForReviewArgs.join(' ')}`,
-								{
-									cwd: uri,
-									timeout: 10000,
-								}
-							);
-							resolve({
-								success: result.success,
-								stdout: result.stdout,
-								handled: true,
-							});
-						} else if (choice === CANCEL_OPTION || !choice) {
-							resolve({
-								success: false,
-								stdout: '',
-								handled: true,
-							});
-						}
-					},
-					{
-						cwd: uri,
-						timeout: 10000,
-						args: pushForReviewArgs,
-					}
-				).then(({ success, stdout }) => {
-					if (success) {
-						resolve({
-							success: true,
-							handled: true,
-							stdout,
-						});
-					} else {
-						resolve({
-							success: false,
-							handled: false,
-							stdout,
-						});
-					}
-				});
+			// Check if we're pushing multiple commits
+			const commits = await getLastCommits(gerritRepo, 100);
+			const gerritCommits = commits.filter((c) => isGerritCommit(c));
+
+			if (gerritCommits.length > 1) {
+				const YES_OPTION = 'Yes';
+				const CANCEL_OPTION = 'Cancel';
+				const choice = await window.showInformationMessage(
+					'You are about to submit multiple commits, are you sure?',
+					YES_OPTION,
+					CANCEL_OPTION
+				);
+
+				if (choice !== YES_OPTION) {
+					return {
+						success: false,
+						stdout: '',
+						handled: true,
+					};
+				}
+			}
+
+			// Push using standard git push
+			const remote =
+				gitReviewFile.remote ??
+				gitReviewFile.defaultremote ??
+				DEFAULT_GIT_REVIEW_FILE.remote;
+
+			const pushCommand = `git push ${remote} HEAD:refs/for/${targetBranch}`;
+			log(`Pushing for review: ${pushCommand}`);
+
+			const result = await tryExecAsync(pushCommand, {
+				cwd: uri,
+				timeout: 30000,
 			});
+
 			progress.report({
 				increment: 50,
 			});
 
-			return result;
+			return {
+				success: result.success,
+				handled: result.success || result.stderr.includes('error'),
+				stdout: result.success ? result.stdout : result.stderr,
+			};
 		}
 	);
 
