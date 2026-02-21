@@ -5,6 +5,7 @@ import {
 	findStash,
 	getChangeIDFromCheckoutString,
 	getCurrentBranch,
+	gitFetchAndCheckoutChange,
 } from './git';
 import {
 	CancellationToken,
@@ -135,22 +136,23 @@ export async function quickCheckout(
 				return;
 			}
 
-			progress.report({
-				message: 'Checking out change',
-				increment: 5,
-			});
-			const { success } = await tryExecAsync(
-				`git-review -d "${getChangeIDFromCheckoutString(
-					changeTreeView.initialChange.changeID
-				)}"`,
-				{
-					cwd: gerritRepo.rootUri.fsPath,
-				}
-			);
-			if (!success) {
-				void window.showErrorMessage('Failed to checkout change');
-				return;
-			}
+		progress.report({
+			message: 'Checking out change',
+			increment: 5,
+		});
+		const changeNum = getChangeIDFromCheckoutString(
+			changeTreeView.initialChange.changeID
+		);
+		const result = await gitFetchAndCheckoutChange(
+			changeNum,
+			'latest',
+			'origin',
+			gerritRepo.rootUri.fsPath
+		);
+		if (!result.success) {
+			void window.showErrorMessage('Failed to checkout change');
+			return;
+		}
 
 			progress.report({
 				message: 'Done',

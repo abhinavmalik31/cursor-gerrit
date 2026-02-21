@@ -51,11 +51,11 @@ import { ChangeTreeView } from '../views/activityBar/changes/changeTreeView';
 import { QuickCheckoutTreeEntry } from '../views/activityBar/quickCheckout';
 import { listenForStreamEvents } from '../lib/stream-events/stream-events';
 import { GerritCommentBase } from '../lib/gerrit/gerritAPI/gerritComment';
-import { getChangeIDFromCheckoutString, gitReview } from '../lib/git/git';
+import { getChangeIDFromCheckoutString, gitReview, gitFetchAndCheckoutChange } from '../lib/git/git';
 import { createAutoRegisterCommand } from 'vscode-generate-package-json';
 import { enterCredentials } from '../lib/credentials/enterCredentials';
 import { rebaseOntoParent, recursiveRebase } from '../lib/git/rebase';
-import { CommentThread, ExtensionContext, Uri, window } from 'vscode';
+import { CommentThread, ExtensionContext, Uri, window, ProgressLocation } from 'vscode';
 import { GerritChange } from '../lib/gerrit/gerritAPI/gerritChange';
 import { focusChange } from '../lib/commandHandlers/focusChange';
 import { Repository } from '../types/vscode-extension-git';
@@ -66,18 +66,46 @@ import { commands as vscodeCommands } from 'vscode';
 import { commands, GerritCodicons } from './defs';
 import { tryExecAsync } from '../lib/git/gitCLI';
 
-async function checkoutChange(uri: string, changeID: string): Promise<boolean> {
-	const { success } = await tryExecAsync(
-		`git-review -d ${getChangeIDFromCheckoutString(changeID)}`,
+async function checkoutChange(
+	uri: string,
+	changeID: string
+): Promise<boolean> {
+	const changeNum = getChangeIDFromCheckoutString(changeID);
+
+	return await window.withProgress(
 		{
-			cwd: uri,
+			location: ProgressLocation.Notification,
+			cancellable: false,
+			title: `Checking out change ${changeNum}`,
+		},
+		async (progress) => {
+			progress.report({
+				message: 'Fetching from Gerrit...',
+				increment: 50,
+			});
+
+			const result = await gitFetchAndCheckoutChange(
+				changeNum,
+				'latest',
+				'origin',
+				uri
+			);
+
+			if (!result.success) {
+				void window.showErrorMessage('Failed to checkout change');
+				return false;
+			}
+
+			progress.report({
+				increment: 50,
+			});
+
+			void window.showInformationMessage(
+				`Successfully checked out change ${changeNum}`
+			);
+			return true;
 		}
 	);
-	if (!success) {
-		void window.showErrorMessage('Failed to checkout change');
-		return false;
-	}
-	return true;
 }
 
 export function registerCommands(

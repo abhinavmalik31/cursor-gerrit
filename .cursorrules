@@ -9,6 +9,13 @@
 - Use tabs consistently across all TypeScript, JavaScript, and JSON files
 - When making changes, maintain the exact indentation style of the surrounding code
 
+### Line Length
+- **Keep lines under 80 characters** when possible
+- Break long lines at logical points (after operators, commas, etc.)
+- For function calls with many arguments, break into multiple lines
+- For long strings, consider breaking into multiple concatenated strings
+- Exception: URLs, import paths, and other cases where breaking would reduce readability
+
 ### TypeScript Best Practices
 - Use strict TypeScript settings
 - Prefer `const` over `let`, avoid `var`

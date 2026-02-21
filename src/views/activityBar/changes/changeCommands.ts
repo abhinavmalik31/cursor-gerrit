@@ -5,6 +5,7 @@ import {
 	window,
 	Uri,
 	env,
+	ProgressLocation,
 } from 'vscode';
 import { Repository } from '../../../types/vscode-extension-git';
 import { getConfiguration } from '../../../lib/vscode/config';
@@ -67,11 +68,38 @@ export async function checkoutBranch(
 	gerritRepo: Repository,
 	changeTreeView: ChangeTreeView
 ): Promise<void> {
-	await gitCheckoutRemote(
-		gerritRepo,
-		changeTreeView.initialChange.changeID,
-		undefined,
-		false
+	const change = await changeTreeView.change;
+	const changeNumber = change?.number ?? changeTreeView.initialChange.changeID;
+
+	await window.withProgress(
+		{
+			location: ProgressLocation.Notification,
+			cancellable: false,
+			title: `Checking out change ${changeNumber}`,
+		},
+		async (progress) => {
+			progress.report({
+				message: 'Fetching from Gerrit...',
+				increment: 30,
+			});
+
+			const success = await gitCheckoutRemote(
+				gerritRepo,
+				changeTreeView.initialChange.changeID,
+				undefined,
+				true
+			);
+
+			progress.report({
+				increment: 70,
+			});
+
+			if (success) {
+				void window.showInformationMessage(
+					`Successfully checked out change ${changeNumber}`
+				);
+			}
+		}
 	);
 }
 

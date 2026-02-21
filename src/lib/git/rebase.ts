@@ -4,6 +4,7 @@ import {
 	getChangeIDFromCheckoutString,
 	getCurrentBranch,
 	getGitVersion,
+	gitFetchAndCheckoutChange,
 } from './git';
 import { getChangeID, getCurrentChangeID, isGerritCommit } from './commit';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
@@ -326,22 +327,23 @@ export async function recursiveRebase(gerritRepo: Repository): Promise<void> {
 					increment: getRelativeProgress(currentProgress),
 				});
 
-				// Checkout branch
-				const { success } = await tryExecAsync(
-					`git-review -d "${getChangeIDFromCheckoutString(
-						operation.change.number
-					)}"`,
-					{
-						cwd: gerritRepo.rootUri.fsPath,
-					}
+			// Checkout branch
+			const changeNum = getChangeIDFromCheckoutString(
+				operation.change.number
+			);
+			const result = await gitFetchAndCheckoutChange(
+				changeNum,
+				'latest',
+				'origin',
+				gerritRepo.rootUri.fsPath
+			);
+			if (token.isCancellationRequested) {
+				return;
+			}
+			if (!result.success) {
+				await cancel(
+					`Failed to download change ${operation.change.number}, aborting`
 				);
-				if (token.isCancellationRequested) {
-					return;
-				}
-				if (!success) {
-					await cancel(
-						`Failed to download change ${operation.change.number}, aborting`
-					);
 				}
 
 				if (

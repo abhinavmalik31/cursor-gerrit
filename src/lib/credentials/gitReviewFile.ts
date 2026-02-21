@@ -29,18 +29,38 @@ async function inferHostAndProject(
 	gerritRepo: Repository
 ): Promise<GitReviewFile | null> {
 	log('Inferring host and project from remote');
+	let remote: string | null = null;
 	const { success, stdout } = await tryExecAsync(
 		'git rev-parse --abbrev-ref --symbolic-full-name @{u}',
 		{
 			cwd: gerritRepo.rootUri.fsPath,
 		}
 	);
-	if (!success) {
-		log('Failed to get remote');
-		return null;
+
+	if (success) {
+		remote = stdout.trim().split('/')[0];
+	} else {
+    // Fallback: In DETACHED HEAD or no upstream, try default remote
+		log('No upstream branch, trying default remote');
+		const { success: ok, stdout: out } =
+			await tryExecAsync('git remote', {
+				cwd: gerritRepo.rootUri.fsPath,
+			});
+
+		if (ok) {
+			const remotes = out.trim().split('\n');
+			remote = remotes.includes('origin')
+				? 'origin'
+				: remotes[0];
+			log(`Using remote: ${remote}`);
+		}
+
+		if (!remote) {
+			log('Failed to determine remote');
+			return null;
+		}
 	}
 
-	const remote = stdout.trim().split('/')[0];
 	const { success: success2, stdout: stdout2 } = await tryExecAsync(
 		`git remote get-url ${remote}`,
 		{
@@ -57,7 +77,11 @@ async function inferHostAndProject(
 		/(?:ssh|http|https):\/\/(?:[^@]+@)?([^:/]+)(?::(\d+))?\/(.+?)(?:\.git)?$/;
 	const match = urlRegex.exec(remoteUrl);
 	if (match) {
-		const [, host, port, project] = match;
+		let [, host, port, project] = match;
+    // Strip leading "/a/" from project if present (authentication prefix)
+    if (project.startsWith('a/')) {
+      project = project.substring(2);
+    }
 		return {
 			host,
 			port: port || DEFAULT_GIT_REVIEW_FILE.port,
