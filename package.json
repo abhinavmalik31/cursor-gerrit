@@ -273,6 +273,19 @@
 				"title": "Open line on Gitiles (permalink)"
 			},
 			{
+				"command": "gerrit.aiReview",
+				"title": "AI Review Change",
+				"icon": "$(lightbulb)"
+			},
+			{
+				"command": "gerrit.enableAiReview",
+				"title": "Enable AI Review"
+			},
+			{
+				"command": "gerrit.selectAiModel",
+				"title": "Select AI Review Model"
+			},
+			{
 				"command": "cmd.gerrit.changeGitRepo",
 				"title": "Gerrit: Change git repo"
 			},
@@ -365,6 +378,19 @@
 			{
 				"command": "cmd.gerrit.openLineOnGitilesPermalink",
 				"title": "Gerrit: Open line on Gitiles (permalink)"
+			},
+			{
+				"command": "cmd.gerrit.aiReview",
+				"title": "Gerrit: AI Review Change",
+				"icon": "$(lightbulb)"
+			},
+			{
+				"command": "cmd.gerrit.enableAiReview",
+				"title": "Gerrit: Enable AI Review"
+			},
+			{
+				"command": "cmd.gerrit.selectAiModel",
+				"title": "Gerrit: Select AI Review Model"
 			}
 		],
 		"keybindings": [
@@ -592,6 +618,18 @@
 					"when": "false"
 				},
 				{
+					"command": "gerrit.aiReview",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.enableAiReview",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.selectAiModel",
+					"when": "false"
+				},
+				{
 					"command": "cmd.gerrit.changeGitRepo",
 					"when": "true"
 				},
@@ -669,6 +707,18 @@
 				},
 				{
 					"command": "cmd.gerrit.openLineOnGitilesPermalink",
+					"when": "true"
+				},
+				{
+					"command": "cmd.gerrit.aiReview",
+					"when": "true"
+				},
+				{
+					"command": "cmd.gerrit.enableAiReview",
+					"when": "true"
+				},
+				{
+					"command": "cmd.gerrit.selectAiModel",
 					"when": "true"
 				}
 			],
@@ -777,14 +827,19 @@
 					"group": "inline@3"
 				},
 				{
+					"command": "gerrit.aiReview",
+					"when": "view == gerrit:changeExplorer && viewItem =~ /gerritchange/",
+					"group": "inline@4"
+				},
+				{
 					"command": "gerrit.dropQuickCheckout",
 					"when": "view == gerrit:quickCheckout && viewItem =~ /quickCheckout/",
-					"group": "inline@4"
+					"group": "inline@5"
 				},
 				{
 					"command": "gerrit.applyQuickCheckout",
 					"when": "view == gerrit:quickCheckout && viewItem =~ /quickCheckout/",
-					"group": "inline@5"
+					"group": "inline@6"
 				},
 				{
 					"command": "gerrit.openOnline",
@@ -1420,16 +1475,34 @@
 					"description": "Changes the default authentication prefix from \"a/\" to a custom string. This should only be necessary if using a non-standard gerrit instance.",
 					"default": "a/"
 				},
-				"gerrit.pushForReviewArgs": {
-					"type": "array",
-					"title": "Arguments to pass to the git-review tool",
-					"description": "Arguments to pass to the git-review tool. See https://linux.die.net/man/1/git-review for more info",
-					"default": [],
-					"items": {
-						"type": "string",
-						"title": "Argument",
-						"description": "Argument to pass to git-review"
-					}
+				"gerrit.aiReview.enabled": {
+					"type": "boolean",
+					"title": "Enable AI Review feature",
+					"description": "Enable AI-powered code review using Cursor CLI",
+					"default": false
+				},
+				"gerrit.aiReview.checkoutBehavior": {
+					"type": "string",
+					"enum": [
+						"ask",
+						"always",
+						"never"
+					],
+					"title": "Checkout behavior for AI Review",
+					"description": "Whether to checkout the change locally before running AI review. \"ask\" prompts each time, \"always\" checks out automatically, \"never\" uses Gerrit context only.",
+					"default": "ask"
+				},
+				"gerrit.aiReview.defaultModel": {
+					"type": "string",
+					"title": "Default AI model for reviews",
+					"description": "Default Cursor model to use for AI reviews (e.g. claude-4.6-sonnet). Leave empty for auto.",
+					"default": ""
+				},
+				"gerrit.aiReview.customPromptFile": {
+					"type": "string",
+					"title": "Custom review prompt file",
+					"description": "Path to a Markdown file with additional review instructions. Relative to workspace root.",
+					"default": ".gerrit-review-prompt.md"
 				}
 			}
 		}
