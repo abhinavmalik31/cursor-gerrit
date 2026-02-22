@@ -286,6 +286,11 @@
 				"title": "Select AI Review Model"
 			},
 			{
+				"command": "gerrit.commentsOverview",
+				"title": "Comments Overview",
+				"icon": "$(comment-discussion)"
+			},
+			{
 				"command": "cmd.gerrit.changeGitRepo",
 				"title": "Gerrit: Change git repo"
 			},
@@ -630,6 +635,10 @@
 					"when": "false"
 				},
 				{
+					"command": "gerrit.commentsOverview",
+					"when": "false"
+				},
+				{
 					"command": "cmd.gerrit.changeGitRepo",
 					"when": "true"
 				},
@@ -880,6 +889,11 @@
 					"command": "gerrit.resetPatchsetSelection",
 					"when": "view == gerrit:changeExplorer && viewItem =~ /gerritchange/ && viewItem =~ /customPatchset/",
 					"group": "change@3"
+				},
+				{
+					"command": "gerrit.commentsOverview",
+					"when": "view == gerrit:changeExplorer && viewItem =~ /gerritchange/",
+					"group": "change@4"
 				},
 				{
 					"command": "gerrit.checkoutBranch",

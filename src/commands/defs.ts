@@ -302,6 +302,11 @@ export const commands: {
     title: 'Select AI Review Model',
     inCommandPalette: true,
   },
+  'gerrit.commentsOverview': {
+    title: 'Comments Overview',
+    icon: '$(comment-discussion)',
+    inCommandPalette: contextProp('gerrit:connected'),
+  },
 };
 
 export const views: {
@@ -525,6 +530,13 @@ export const views: {
           IS_GERRIT_CHANGE_EXPLORER_VIEW,
           viewItemContains(TREE_ITEM_TYPE_CHANGE),
           viewItemContains(TREE_ITEM_CHANGE_CUSTOM_PATCHSET_SELECTION)
+        ),
+      },
+      {
+        command: GerritExtensionCommands.COMMENTS_OVERVIEW,
+        when: and(
+          IS_GERRIT_CHANGE_EXPLORER_VIEW,
+          viewItemContains(TREE_ITEM_TYPE_CHANGE)
         ),
       },
     ],
