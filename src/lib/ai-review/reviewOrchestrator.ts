@@ -28,6 +28,15 @@ import {
   ChangeTreeView,
 } from '../../views/activityBar/changes/changeTreeView';
 import {
+  FileTreeView,
+} from '../../views/activityBar/changes/changeTreeView/fileTreeView';
+import {
+  GerritChange,
+} from '../gerrit/gerritAPI/gerritChange';
+import {
+  GerritAPIWith,
+} from '../gerrit/gerritAPI/api';
+import {
   getGerritURLFromReviewFile,
 } from '../credentials/enterCredentials';
 import {
@@ -40,6 +49,9 @@ import {
   getOutputChannel,
   showOutputChannel,
 } from '../util/log';
+import {
+  showCommentsOverview,
+} from '../../views/commentsOverview';
 import * as fs from 'fs';
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
@@ -464,7 +476,7 @@ function processStreamEvent(
         oc.appendLine('');
         progress.report({
           message: 'Agent started. Look at output panel (Gerrit) for live '
-                   + 'details.',
+            + 'details.',
         });
       }
       break;
@@ -558,6 +570,7 @@ interface DraftItem {
   filePath: string;
   line?: number;
   message: string;
+  changeNumber: string;
 }
 
 async function fetchDrafts(
@@ -582,6 +595,7 @@ async function fetchDrafts(
           filePath,
           line: c.line,
           message: c.message ?? '',
+          changeNumber,
         });
       }
     }
@@ -598,8 +612,36 @@ async function fetchDrafts(
 
 async function browseDrafts(
   drafts: DraftItem[],
-  gerritRepo: Repository
+  gerritRepo: Repository,
+  changeNumber: string
 ): Promise<void> {
+  // Resolve the change once and warm ALL caches
+  // (change, comments, drafts) before the loop
+  // so every navigateToDraft is instant.
+  const change = await GerritChange.getChangeOnce(
+    changeNumber,
+    [
+      GerritAPIWith.CURRENT_REVISION,
+      GerritAPIWith.CURRENT_FILES,
+    ]
+  );
+  if (change) {
+    await Promise.all([
+      GerritChange.getAllComments(change.changeID)
+        .then((s) => s.getValue()),
+      GerritChange.getAllComments(change.change_id)
+        .then((s) => s.getValue())
+        .catch(() => { }),
+      GerritChange.getChangeOnce(
+        change.change_id,
+        [
+          GerritAPIWith.CURRENT_REVISION,
+          GerritAPIWith.CURRENT_FILES,
+        ]
+      ).catch(() => { }),
+    ]);
+  }
+
   let idx = 0;
   while (idx >= 0 && idx < drafts.length) {
     const draft = drafts[idx];
@@ -651,10 +693,72 @@ async function navigateToDraft(
     return;
   }
 
+  try {
+    const change = await GerritChange.getChangeOnce(
+      draft.changeNumber,
+      [
+        GerritAPIWith.CURRENT_REVISION,
+        GerritAPIWith.CURRENT_FILES,
+      ]
+    );
+    if (!change) {
+      throw new Error('Change not found');
+    }
+
+    const revision =
+      await change.getCurrentRevision();
+    if (!revision) {
+      throw new Error('Revision not found');
+    }
+
+    const filesMap = await (
+      await revision.files(null)
+    ).getValue();
+    const file = filesMap?.[draft.filePath];
+
+    if (file) {
+      const diffCmd =
+        await FileTreeView.createDiffCommand(
+          gerritRepo, file, null
+        );
+      if (diffCmd?.arguments) {
+        await vscodeCommands.executeCommand(
+          diffCmd.command,
+          ...diffCmd.arguments
+        );
+        if (draft.line) {
+          await new Promise((r) =>
+            setTimeout(r, 300)
+          );
+          void vscodeCommands.executeCommand(
+            'revealLine',
+            {
+              lineNumber: draft.line - 1,
+              at: 'center',
+            }
+          );
+        }
+        return;
+      }
+    }
+
+    await openFileFallback(
+      draft, gerritRepo
+    );
+  } catch {
+    await openFileFallback(
+      draft, gerritRepo
+    );
+  }
+}
+
+async function openFileFallback(
+  draft: DraftItem,
+  gerritRepo: Repository
+): Promise<void> {
   const fileUri = Uri.joinPath(
     gerritRepo.rootUri, draft.filePath
   );
-
   try {
     const doc = await workspace.openTextDocument(
       fileUri
@@ -696,6 +800,7 @@ async function showCompletionActions(
   const actions: string[] = [];
   if (count > 0) {
     actions.push('Review Comments');
+    actions.push('Comments Overview');
   }
   actions.push('Open in Gerrit');
 
@@ -704,7 +809,13 @@ async function showCompletionActions(
   );
 
   if (result === 'Review Comments') {
-    await browseDrafts(drafts, gerritRepo);
+    await browseDrafts(
+      drafts, gerritRepo, changeNumber
+    );
+  } else if (result === 'Comments Overview') {
+    await showCommentsOverview(
+      changeNumber, gerritRepo
+    );
   } else if (result === 'Open in Gerrit') {
     await openChangeInBrowser(changeNumber);
   }

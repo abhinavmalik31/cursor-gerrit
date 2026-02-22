@@ -68,6 +68,7 @@ import { tryExecAsync } from '../lib/git/gitCLI';
 import { runAIReview } from '../lib/ai-review/reviewOrchestrator';
 import { enableAiReview } from '../lib/ai-review/enableAiReview';
 import { selectAiModel } from '../lib/ai-review/modelSelector';
+import { showCommentsOverview } from '../views/commentsOverview';
 
 async function checkoutChange(
   uri: string,
@@ -593,6 +594,16 @@ export function registerCommands(
     registerCommand(
       GerritExtensionCommands.SELECT_AI_MODEL,
       () => selectAiModel()
+    )
+  );
+  context.subscriptions.push(
+    registerCommand(
+      GerritExtensionCommands.COMMENTS_OVERVIEW,
+      (changeTreeView: ChangeTreeView) =>
+        showCommentsOverview(
+          changeTreeView.initialChange.number.toString(),
+          gerritRepo
+        )
     )
   );
 }
