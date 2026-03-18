@@ -25,6 +25,8 @@ import { VersionNumber } from '../util/version';
 import { getAPI } from '../gerrit/gerritAPI';
 import { log } from '../util/log';
 import { rebase } from './rebase';
+import { getAPI } from '../gerrit/gerritAPI';
+import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 
 export async function onChangeLastCommit(
 	gerritRepo: Repository,
