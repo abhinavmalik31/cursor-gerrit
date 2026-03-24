@@ -387,9 +387,13 @@ async function navigateToComment(
       return;
     }
 
+    const cmdArgs = diffCmd.arguments as unknown;
+    if (!isUnknownArray(cmdArgs)) {
+      return;
+    }
     await vscodeCommands.executeCommand(
       diffCmd.command,
-      ...diffCmd.arguments
+      ...cmdArgs
     );
     if (line) {
       await new Promise((r) =>
@@ -409,4 +413,10 @@ async function navigateToComment(
       + String(e)
     );
   }
+}
+
+function isUnknownArray(
+  val: unknown
+): val is readonly unknown[] {
+  return Array.isArray(val);
 }

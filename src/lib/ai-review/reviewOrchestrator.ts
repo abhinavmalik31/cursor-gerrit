@@ -15,9 +15,15 @@ import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
 import { spawn } from 'child_process';
 import {
+  runPreflight,
+  buildMcpEnableCommand,
+  AgentCommand,
+} from './preflight';
+import {
   writeMcpConfig,
   GerritCredentials,
 } from '../mcp/mcpManager';
+import { tryExecAsync } from '../git/gitCLI';
 import {
   quickCheckout,
 } from '../git/quick-checkout';
@@ -163,6 +169,21 @@ async function doReview(
   }
 
   progress.report({
+    message: 'Checking prerequisites...',
+    increment: 5,
+  });
+
+  const preflight = await runPreflight();
+  if (!preflight.ok || !preflight.agent) {
+    throw new Error(
+      preflight.error
+      ?? 'AI Review prerequisites not met.'
+    );
+  }
+
+  await bestEffortMcpEnable(preflight.agent);
+
+  progress.report({
     message: 'Preparing review prompt...',
     increment: 5,
   });
@@ -180,6 +201,7 @@ async function doReview(
 
   try {
     await invokeCursorAgent(
+      preflight.agent,
       changeNumber, promptFile, progress, token
     );
   } finally {
@@ -251,6 +273,7 @@ async function extractCredentials(
 // ── Cursor agent invocation ─────────────────────────
 
 async function invokeCursorAgent(
+  agent: AgentCommand,
   changeNumber: string,
   promptFile: string,
   progress: {
@@ -265,13 +288,13 @@ async function invokeCursorAgent(
   const prompt =
     `Read and follow ${promptFile}`;
   const args = [
-    'agent',
+    ...agent.baseArgs,
     '--print',
     '--output-format', 'stream-json',
     '--stream-partial-output',
     '--approve-mcps',
-    '--trust',  // Truest current workspace.
-    '--force', // Needed for MCP tools if not already enabled.
+    '--trust',
+    '--force',
   ];
   if (model) {
     args.push('--model', model);
@@ -295,7 +318,9 @@ async function invokeCursorAgent(
     oc.appendLine('');
   }
 
-  log('Invoking cursor agent (stream-json)');
+  log(
+    `Invoking ${agent.cmd} agent (stream-json)`
+  );
 
   const TIMEOUT_MS = 5 * 60 * 1000;
   const startTime = Date.now();
@@ -314,7 +339,7 @@ async function invokeCursorAgent(
       (fn as (v?: unknown) => void)(val);
     };
 
-    const proc = spawn('cursor', args, {
+    const proc = spawn(agent.cmd, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -385,10 +410,11 @@ async function invokeCursorAgent(
         );
       }
       settle(reject, new Error(
-        'Cursor CLI failed to start: '
+        'Cursor Agent CLI failed to start: '
         + err.message
-        + '. Check that "cursor" command '
-        + 'is installed and available.'
+        + '. Install it via: '
+        + 'curl https://cursor.com/install '
+        + '-fsS | bash'
       ));
     });
 
@@ -412,11 +438,11 @@ async function invokeCursorAgent(
         );
       }
       if (code === 0 || code === null) {
-        log('Cursor agent completed');
+        log('Cursor Agent completed');
         settle(resolve);
       } else {
         settle(reject, new Error(
-          'Cursor agent exited with code '
+          'Cursor Agent exited with code '
           + String(code)
         ));
       }
@@ -722,9 +748,13 @@ async function navigateToDraft(
           gerritRepo, file, null
         );
       if (diffCmd?.arguments) {
+        const cmdArgs = diffCmd.arguments as unknown;
+        if (!isUnknownArray(cmdArgs)) {
+          return;
+        }
         await vscodeCommands.executeCommand(
           diffCmd.command,
-          ...diffCmd.arguments
+          ...cmdArgs
         );
         if (draft.line) {
           await new Promise((r) =>
@@ -852,6 +882,32 @@ async function openChangeInBrowser(
 }
 
 // ── Helpers ─────────────────────────────────────────
+
+async function bestEffortMcpEnable(
+  agent: AgentCommand
+): Promise<void> {
+  try {
+    const cwd =
+      workspace.workspaceFolders?.[0]?.uri
+        .fsPath;
+    const cmd = buildMcpEnableCommand(
+      agent, 'gerrit-review'
+    );
+    await tryExecAsync(cmd, {
+      silent: true,
+      cwd,
+    });
+  } catch {
+    // Best-effort; --approve-mcps flag on the
+    // agent invocation handles this at runtime.
+  }
+}
+
+function isUnknownArray(
+  val: unknown
+): val is readonly unknown[] {
+  return Array.isArray(val);
+}
 
 function cleanupTempFile(filePath: string): void {
   try {

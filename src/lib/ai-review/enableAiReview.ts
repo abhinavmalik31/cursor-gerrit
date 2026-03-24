@@ -6,6 +6,11 @@ import {
 import { getConfiguration } from '../vscode/config';
 import { selectAiModel } from './modelSelector';
 import {
+  runPreflight,
+  buildMcpEnableCommand,
+  AgentCommand,
+} from './preflight';
+import {
   writeMcpConfig,
   GerritCredentials,
 } from '../mcp/mcpManager';
@@ -27,8 +32,12 @@ export async function enableAiReview(
 ): Promise<void> {
   const config = getConfiguration();
 
-  const cursorOk = await verifyCursorCli();
-  if (!cursorOk) {
+  const preflight = await runPreflight();
+  if (!preflight.ok || !preflight.agent) {
+    void window.showErrorMessage(
+      preflight.error
+      ?? 'AI Review prerequisites not met.'
+    );
     return;
   }
 
@@ -76,7 +85,7 @@ export async function enableAiReview(
       + 'may not have full Gerrit integration.'
     );
   } else {
-    await enableMcpServer();
+    await enableMcpServer(preflight.agent);
   }
 
   await config.update(
@@ -91,31 +100,6 @@ export async function enableAiReview(
   log('AI Review enabled successfully');
 }
 
-async function verifyCursorCli(): Promise<boolean> {
-  const { success, stdout } = await tryExecAsync(
-    'which cursor',
-    { silent: true }
-  );
-
-  if (!success || !stdout.trim()) {
-    const action = await window.showErrorMessage(
-      'Cursor CLI not found. Please ensure '
-      + 'the "cursor" command is available in '
-      + 'your PATH. You can install it from '
-      + 'Cursor settings (Command Palette > '
-      + '"Install \'cursor\' command").',
-      'Retry',
-      'Cancel'
-    );
-    if (action === 'Retry') {
-      return verifyCursorCli();
-    }
-    return false;
-  }
-
-  log('Cursor CLI found at: ' + stdout.trim());
-  return true;
-}
 
 async function pickCheckoutBehavior(): Promise<
   CheckoutBehavior | undefined
@@ -204,12 +188,17 @@ async function extractCredentials(
   };
 }
 
-async function enableMcpServer(): Promise<void> {
+async function enableMcpServer(
+  agent: AgentCommand
+): Promise<void> {
   const cwd =
     workspace.workspaceFolders?.[0]?.uri.fsPath;
 
+  const cmd = buildMcpEnableCommand(
+    agent, 'gerrit-review'
+  );
   const { success, stderr } = await tryExecAsync(
-    'cursor agent mcp enable gerrit-review',
+    cmd,
     { silent: true, cwd }
   );
 
