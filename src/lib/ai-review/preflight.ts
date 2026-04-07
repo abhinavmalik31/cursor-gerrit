@@ -1,10 +1,7 @@
 import { exec } from 'child_process';
-import {
-	AgentCommand,
-	buildMcpEnableCommand,
-} from './agentCli';
+import { AgentCommand } from './agentCli';
 
-export { AgentCommand, buildMcpEnableCommand };
+export { AgentCommand };
 
 export const MIN_NODE_MAJOR = 18;
 export const CLI_INSTALL_URL =

@@ -18,7 +18,6 @@ import { getAPI } from '../gerrit/gerritAPI';
 import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 import { GerritChange } from '../gerrit/gerritAPI/gerritChange';
 import { gitFetchAndCheckoutChange } from '../git/git';
-import { tryExecAsync } from '../git/gitCLI';
 import { quickCheckout } from '../git/quick-checkout';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { Repository } from '../../types/vscode-extension-git';
@@ -28,7 +27,6 @@ import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
 import {
   runPreflight,
-  buildMcpEnableCommand,
   AgentCommand,
 } from './preflight';
 import { spawn } from 'child_process';
@@ -154,8 +152,6 @@ async function doReview(
       ?? 'AI Review prerequisites not met.'
     );
   }
-
-  await bestEffortMcpEnable(preflight.agent);
 
   progress.report({
     message: 'Preparing review prompt...',
@@ -865,26 +861,6 @@ async function openChangeInBrowser(
 }
 
 // ── Helpers ─────────────────────────────────────────
-
-async function bestEffortMcpEnable(
-  agent: AgentCommand
-): Promise<void> {
-  try {
-    const cwd =
-      workspace.workspaceFolders?.[0]?.uri
-        .fsPath;
-    const cmd = buildMcpEnableCommand(
-      agent, 'gerrit-review'
-    );
-    await tryExecAsync(cmd, {
-      silent: true,
-      cwd,
-    });
-  } catch {
-    // Best-effort; --approve-mcps flag on the
-    // agent invocation handles this at runtime.
-  }
-}
 
 function cleanupTempFile(filePath: string): void {
   try {
