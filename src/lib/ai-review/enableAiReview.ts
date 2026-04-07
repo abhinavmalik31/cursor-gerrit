@@ -1,7 +1,12 @@
 import { getGerritURLFromReviewFile } from '../credentials/enterCredentials';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
-import { window, workspace, ExtensionContext } from 'vscode';
+import {
+	window,
+	workspace,
+	ExtensionContext,
+	ProgressLocation,
+} from 'vscode';
 import { GerritSecrets } from '../credentials/secrets';
 import { getConfiguration } from '../vscode/config';
 import { getGerritRepo } from '../gerrit/gerrit';
@@ -43,39 +48,77 @@ export async function enableAiReview(
     checkoutBehavior
   );
 
-  const credentials = await extractCredentials(
-    context
+  const ok = await window.withProgress(
+    {
+      location: ProgressLocation.Notification,
+      title: 'Gerrit: Setting up AI Review',
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({
+        message: 'Extracting credentials...',
+      });
+
+      const credentials =
+        await extractCredentials(context);
+      if (!credentials) {
+        void window.showWarningMessage(
+          'Could not extract Gerrit credentials. '
+          + 'Please configure them via "Gerrit: '
+          + 'Enter Credentials" first.'
+        );
+        return false;
+      }
+
+      progress.report({
+        message: 'Writing MCP configuration...',
+        increment: 30,
+      });
+
+      const mcpOk = await writeMcpConfig(
+        context.extensionPath,
+        credentials
+      );
+      if (!mcpOk) {
+        void window.showWarningMessage(
+          'Failed to write MCP config. AI Review '
+          + 'may not have full Gerrit integration.'
+        );
+        return false;
+      }
+
+      progress.report({
+        message: 'Enabling MCP server...',
+        increment: 30,
+      });
+
+      const mcpEnabled = await enableMcpServer();
+      if (!mcpEnabled) {
+        return false;
+      }
+
+      progress.report({
+        message: 'Finalizing...',
+        increment: 30,
+      });
+
+      await config.update(
+        'gerrit.aiReview.enabled', true
+      );
+
+      return true;
+    }
   );
-  if (!credentials) {
-    void window.showWarningMessage(
-      'Could not extract Gerrit credentials. '
-      + 'Please configure them via "Gerrit: '
-      + 'Enter Credentials" first.'
-    );
+
+  if (!ok) {
     return;
   }
-
-  const mcpOk = await writeMcpConfig(
-    context.extensionPath,
-    credentials
-  );
-  if (!mcpOk) {
-    void window.showWarningMessage(
-      'Failed to write MCP config. AI Review '
-      + 'may not have full Gerrit integration.'
-    );
-  } else {
-    await enableMcpServer();
-  }
-
-  await config.update(
-    'gerrit.aiReview.enabled', true
-  );
 
   void window.showInformationMessage(
     'AI Review enabled! Use "Gerrit: AI Review '
     + 'Change" from the command palette or '
-    + 'click the "AI Review Change" button in the Change Explorer view.'
+    + 'click the "AI Review Change" button '
+    + 'in the Change Explorer view.'
   );
   log('AI Review enabled successfully');
 }
@@ -193,7 +236,7 @@ async function extractCredentials(
   };
 }
 
-async function enableMcpServer(): Promise<void> {
+async function enableMcpServer(): Promise<boolean> {
   const cwd =
     workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -204,10 +247,25 @@ async function enableMcpServer(): Promise<void> {
 
   if (success) {
     log('MCP server auto-approved');
-  } else {
-    log(
-      'Could not auto-approve MCP server: '
-      + stderr
-    );
+    return true;
   }
+
+  log(
+    'Could not auto-approve MCP server: '
+    + stderr
+  );
+
+  const action = await window.showWarningMessage(
+    'Failed to auto-enable the MCP server. '
+    + 'You may need to enable "gerrit-review" '
+    + 'manually in Cursor MCP settings.',
+    'Retry',
+    'Continue Anyway'
+  );
+
+  if (action === 'Retry') {
+    return enableMcpServer();
+  }
+
+  return action === 'Continue Anyway';
 }
