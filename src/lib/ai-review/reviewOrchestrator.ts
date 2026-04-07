@@ -18,7 +18,6 @@ import { getAPI } from '../gerrit/gerritAPI';
 import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 import { GerritChange } from '../gerrit/gerritAPI/gerritChange';
 import { gitFetchAndCheckoutChange } from '../git/git';
-import { tryExecAsync } from '../git/gitCLI';
 import { quickCheckout } from '../git/quick-checkout';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { Repository } from '../../types/vscode-extension-git';
@@ -26,11 +25,8 @@ import { log, getOutputChannel, showOutputChannel } from '../util/log';
 import { getConfiguration } from '../vscode/config';
 import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
-import {
-  runPreflight,
-  buildMcpEnableCommand,
-  AgentCommand,
-} from './preflight';
+import { runPreflight } from './preflight';
+import { AgentCommand } from './agentCli';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 
@@ -155,8 +151,6 @@ async function doReview(
     );
   }
 
-  await bestEffortMcpEnable(preflight.agent);
-
   progress.report({
     message: 'Preparing review prompt...',
     increment: 5,
@@ -266,6 +260,8 @@ async function invokeCursorAgent(
     '--print',
     '--output-format', 'stream-json',
     '--stream-partial-output',
+    // Handles MCP server approval at runtime,
+    // no separate pre-enable step needed.
     '--approve-mcps',
     '--trust',
     '--force',
@@ -865,26 +861,6 @@ async function openChangeInBrowser(
 }
 
 // ── Helpers ─────────────────────────────────────────
-
-async function bestEffortMcpEnable(
-  agent: AgentCommand
-): Promise<void> {
-  try {
-    const cwd =
-      workspace.workspaceFolders?.[0]?.uri
-        .fsPath;
-    const cmd = buildMcpEnableCommand(
-      agent, 'gerrit-review'
-    );
-    await tryExecAsync(cmd, {
-      silent: true,
-      cwd,
-    });
-  } catch {
-    // Best-effort; --approve-mcps flag on the
-    // agent invocation handles this at runtime.
-  }
-}
 
 function cleanupTempFile(filePath: string): void {
   try {

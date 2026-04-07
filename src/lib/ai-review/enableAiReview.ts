@@ -7,12 +7,20 @@ import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { log } from '../util/log';
 import { getConfiguration } from '../vscode/config';
 import {
-  runPreflight,
-  buildMcpEnableCommand,
-  AgentCommand,
+  runPreflightDetailed,
+  PreflightStatus,
+  MIN_NODE_MAJOR,
+  CLI_INSTALL_CMD,
+  CLI_INSTALL_URL,
 } from './preflight';
+import {
+  AgentCommand,
+  buildMcpEnableCommand,
+} from './agentCli';
 import { selectAiModel } from './modelSelector';
-import { window, workspace, ExtensionContext } from 'vscode';
+import {
+  window, workspace, env, Uri, ExtensionContext,
+} from 'vscode';
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
 
@@ -21,12 +29,8 @@ export async function enableAiReview(
 ): Promise<void> {
   const config = getConfiguration();
 
-  const preflight = await runPreflight();
-  if (!preflight.ok || !preflight.agent) {
-    void window.showErrorMessage(
-      preflight.error
-      ?? 'AI Review prerequisites not met.'
-    );
+  const agent = await resolvePrerequisites();
+  if (!agent) {
     return;
   }
 
@@ -74,7 +78,7 @@ export async function enableAiReview(
       + 'may not have full Gerrit integration.'
     );
   } else {
-    await enableMcpServer(preflight.agent);
+    await enableMcpServer(agent);
   }
 
   await config.update(
@@ -84,9 +88,137 @@ export async function enableAiReview(
   void window.showInformationMessage(
     'AI Review enabled! Use "Gerrit: AI Review '
     + 'Change" from the command palette or '
-    + 'click the "AI Review Change" button in the Change Explorer view.'
+    + 'click the "AI Review Change" button '
+    + 'in the Change Explorer view.'
   );
   log('AI Review enabled successfully');
+}
+
+// ── Prerequisite resolution ─────────────────────
+
+async function resolvePrerequisites(): Promise<
+  AgentCommand | null
+> {
+  let status = await runPreflightDetailed();
+
+  if (!status.nodeOk) {
+    const fixed = await promptNodeUpgrade(status);
+    if (!fixed) {
+      return null;
+    }
+    status = await runPreflightDetailed();
+    if (!status.nodeOk) {
+      void window.showErrorMessage(
+        `Node.js >= ${MIN_NODE_MAJOR} is still `
+        + 'required. Please upgrade and retry.'
+      );
+      return null;
+    }
+  }
+
+  if (!status.cliFound) {
+    const fixed = await promptCliInstall();
+    if (!fixed) {
+      return null;
+    }
+    status = await runPreflightDetailed();
+    if (!status.cliFound || !status.agent) {
+      void window.showErrorMessage(
+        'Cursor CLI is still not detected. '
+        + 'Please install it and retry.'
+      );
+      return null;
+    }
+  }
+
+  return status.agent ?? null;
+}
+
+async function promptNodeUpgrade(
+  status: PreflightStatus
+): Promise<boolean> {
+  const actions: string[] = [
+    'Open nodejs.org',
+  ];
+  if (status.hasNvm) {
+    actions.unshift('Run nvm install --lts');
+  }
+  actions.push('Cancel');
+
+  const pick = await window.showWarningMessage(
+    `Node.js >= ${MIN_NODE_MAJOR} is required, `
+    + `but found v${status.nodeMajor}.`,
+    ...actions
+  );
+
+  if (pick === 'Run nvm install --lts') {
+    const term = window.createTerminal(
+      'Node Upgrade'
+    );
+    term.show();
+    term.sendText(
+      'nvm install --lts && nvm use --lts'
+    );
+    await window.showInformationMessage(
+      'After the terminal finishes, '
+      + 'press "Done" to continue.',
+      'Done'
+    );
+    return true;
+  }
+
+  if (pick === 'Open nodejs.org') {
+    void env.openExternal(
+      Uri.parse('https://nodejs.org/')
+    );
+    await window.showInformationMessage(
+      'After upgrading Node.js, '
+      + 'press "Done" to continue.',
+      'Done'
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function promptCliInstall(): Promise<
+  boolean
+> {
+  const pick = await window.showWarningMessage(
+    'Cursor Agent CLI not found.',
+    'Install Now',
+    'Show Instructions',
+    'Cancel'
+  );
+
+  if (pick === 'Install Now') {
+    const term = window.createTerminal(
+      'Cursor CLI Install'
+    );
+    term.show();
+    term.sendText(CLI_INSTALL_CMD);
+    await window.showInformationMessage(
+      'After the terminal finishes, '
+      + 'press "Done" to continue.',
+      'Done'
+    );
+    return true;
+  }
+
+  if (pick === 'Show Instructions') {
+    void env.openExternal(
+      Uri.parse(CLI_INSTALL_URL)
+    );
+    await window.showInformationMessage(
+      'After installing the CLI, '
+      + 'press "Done" to continue.',
+      'Done'
+    );
+    return true;
+  }
+
+  return false;
 }
 
 

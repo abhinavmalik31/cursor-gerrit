@@ -1,9 +1,11 @@
 import * as assert from 'assert';
 import {
 	runPreflight,
-	buildMcpEnableCommand,
 	PreflightDeps,
 } from '../src/lib/ai-review/preflight';
+import {
+	buildMcpEnableCommand,
+} from '../src/lib/ai-review/agentCli';
 
 function makeDeps(
 	overrides: Partial<PreflightDeps> = {}
@@ -120,22 +122,24 @@ describe('runPreflight', () => {
 	it(
 		'checks Node version before CLI detection',
 		async () => {
-			const callOrder: string[] = [];
+			const whichNames: string[] = [];
 			const deps: PreflightDeps = {
-				getNodeMajor: () => {
-					callOrder.push('node');
-					return 14;
-				},
-				whichCmd: async (_name: string) => {
-					callOrder.push('which');
-					return true;
+				getNodeMajor: () => 14,
+				whichCmd: async (name: string) => {
+					whichNames.push(name);
+					return false;
 				},
 			};
 			const result = await runPreflight(deps);
 
 			assert.strictEqual(result.ok, false);
-			assert.deepStrictEqual(
-				callOrder, ['node']
+			assert.ok(
+				!whichNames.includes('agent'),
+				'should not probe for agent CLI'
+			);
+			assert.ok(
+				!whichNames.includes('cursor'),
+				'should not probe for cursor CLI'
 			);
 		}
 	);

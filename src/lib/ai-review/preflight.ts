@@ -1,13 +1,16 @@
 import { exec } from 'child_process';
+import {
+	AgentCommand,
+	buildMcpEnableCommand,
+} from './agentCli';
 
-const MIN_NODE_MAJOR = 18;
-const INSTALL_URL =
+export { AgentCommand, buildMcpEnableCommand };
+
+export const MIN_NODE_MAJOR = 18;
+export const CLI_INSTALL_URL =
 	'https://cursor.com/docs/cli/installation';
-
-export interface AgentCommand {
-	cmd: string;
-	baseArgs: string[];
-}
+export const CLI_INSTALL_CMD =
+	'curl https://cursor.com/install -fsS | bash';
 
 export interface PreflightDeps {
 	whichCmd: (
@@ -39,38 +42,54 @@ const defaultDeps: PreflightDeps = {
 	},
 };
 
+export interface PreflightStatus {
+	nodeOk: boolean;
+	nodeMajor: number;
+	cliFound: boolean;
+	agent?: AgentCommand;
+	hasNvm?: boolean;
+}
+
 export interface PreflightResult {
 	ok: boolean;
 	agent?: AgentCommand;
 	error?: string;
 }
 
-export async function runPreflight(
+export async function runPreflightDetailed(
 	deps: PreflightDeps = defaultDeps
-): Promise<PreflightResult> {
+): Promise<PreflightStatus> {
 	const nodeMajor = deps.getNodeMajor();
-	if (nodeMajor < MIN_NODE_MAJOR) {
+	const nodeOk = nodeMajor >= MIN_NODE_MAJOR;
+
+	if (!nodeOk) {
+		const hasNvm =
+			await deps.whichCmd('nvm');
 		return {
-			ok: false,
-			error:
-				`Node.js >= ${MIN_NODE_MAJOR} is required `
-				+ 'for AI Review, but found '
-				+ `v${nodeMajor}. Please upgrade Node.js.`,
+			nodeOk: false,
+			nodeMajor,
+			cliFound: false,
+			hasNvm,
 		};
 	}
 
 	const hasAgent = await deps.whichCmd('agent');
 	if (hasAgent) {
 		return {
-			ok: true,
+			nodeOk: true,
+			nodeMajor,
+			cliFound: true,
 			agent: { cmd: 'agent', baseArgs: [] },
 		};
 	}
 
-	const hasCursor = await deps.whichCmd('cursor');
+	const hasCursor =
+		await deps.whichCmd('cursor');
 	if (hasCursor) {
 		return {
-			ok: true,
+			nodeOk: true,
+			nodeMajor,
+			cliFound: true,
 			agent: {
 				cmd: 'cursor',
 				baseArgs: ['agent'],
@@ -79,24 +98,42 @@ export async function runPreflight(
 	}
 
 	return {
-		ok: false,
-		error:
-			'Cursor Agent CLI not found. '
-			+ 'Install it with: '
-			+ 'curl https://cursor.com/install '
-			+ '-fsS | bash  '
-			+ `(${INSTALL_URL})`,
+		nodeOk: true,
+		nodeMajor,
+		cliFound: false,
 	};
 }
 
-export function buildMcpEnableCommand(
-	agent: AgentCommand,
-	serverName: string
-): string {
-	const parts = [
-		agent.cmd, ...agent.baseArgs,
-		'mcp', 'enable', serverName,
-	];
-	return parts.join(' ');
+export async function runPreflight(
+	deps: PreflightDeps = defaultDeps
+): Promise<PreflightResult> {
+	const status =
+		await runPreflightDetailed(deps);
+
+	if (!status.nodeOk) {
+		return {
+			ok: false,
+			error:
+				`Node.js >= ${MIN_NODE_MAJOR} is `
+				+ 'required for AI Review, but found '
+				+ `v${status.nodeMajor}. `
+				+ 'Please upgrade Node.js.',
+		};
+	}
+
+	if (!status.cliFound) {
+		return {
+			ok: false,
+			error:
+				'Cursor Agent CLI not found. '
+				+ `Install it with: ${CLI_INSTALL_CMD}`
+				+ `  (${CLI_INSTALL_URL})`,
+		};
+	}
+
+	return {
+		ok: true,
+		agent: status.agent,
+	};
 }
 
