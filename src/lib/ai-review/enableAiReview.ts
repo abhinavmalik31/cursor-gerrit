@@ -4,6 +4,10 @@ import { GerritSecrets } from '../credentials/secrets';
 import { tryExecAsync } from '../git/gitCLI';
 import { getGerritRepo } from '../gerrit/gerrit';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
+import {
+  UserCancelledError,
+  isUserCancelledError,
+} from '../util/errors';
 import { log } from '../util/log';
 import { getConfiguration } from '../vscode/config';
 import {
@@ -24,114 +28,128 @@ import {
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
 
+interface PrerequisiteResult {
+  agent: AgentCommand;
+}
+
 export async function enableAiReview(
   context: ExtensionContext
 ): Promise<void> {
-  const config = getConfiguration();
+  try {
+    const config = getConfiguration();
 
-  const agent = await resolvePrerequisites();
-  if (!agent) {
-    return;
-  }
+    const { agent } =
+      await resolvePrerequisites();
 
-  const modelResult = await selectAiModel();
-  if (modelResult === undefined) {
+    const modelResult = await selectAiModel();
+    if (modelResult === undefined) {
+      throw new UserCancelledError('selectModel');
+    }
+
+    const checkoutBehavior =
+      await pickCheckoutBehavior();
+    if (!checkoutBehavior) {
+      throw new UserCancelledError(
+        'checkoutBehavior'
+      );
+    }
+
+    await config.update(
+      'gerrit.aiReview.checkoutBehavior',
+      checkoutBehavior
+    );
+
+    const credentials = await extractCredentials(
+      context
+    );
+    if (!credentials) {
+      throw new Error(
+        'Could not extract Gerrit credentials. '
+        + 'Please configure them via "Gerrit: '
+        + 'Enter Credentials" first.'
+      );
+    }
+
+    const mcpOk = await writeMcpConfig(
+      context.extensionPath,
+      credentials
+    );
+    if (!mcpOk) {
+      void window.showWarningMessage(
+        'Failed to write MCP config. AI Review '
+        + 'may not have full Gerrit integration.'
+      );
+    } else {
+      await enableMcpServer(agent);
+    }
+
+    await config.update(
+      'gerrit.aiReview.enabled', true
+    );
+
     void window.showInformationMessage(
-      'AI Review setup cancelled.'
+      'AI Review enabled! Use "Gerrit: AI Review '
+      + 'Change" from the command palette or '
+      + 'click the "AI Review Change" button '
+      + 'in the Change Explorer view.'
     );
-    return;
-  }
-
-  const checkoutBehavior =
-    await pickCheckoutBehavior();
-  if (!checkoutBehavior) {
-    void window.showInformationMessage(
-      'AI Review setup cancelled.'
+    log('AI Review enabled successfully');
+  } catch (e: unknown) {
+    if (isUserCancelledError(e)) {
+      log('AI Review setup cancelled');
+      return;
+    }
+    const msg = e instanceof Error
+      ? e.message : String(e);
+    log('AI Review setup failed: ' + msg);
+    void window.showErrorMessage(
+      'AI Review setup failed: ' + msg
     );
-    return;
   }
-
-  await config.update(
-    'gerrit.aiReview.checkoutBehavior',
-    checkoutBehavior
-  );
-
-  const credentials = await extractCredentials(
-    context
-  );
-  if (!credentials) {
-    void window.showWarningMessage(
-      'Could not extract Gerrit credentials. '
-      + 'Please configure them via "Gerrit: '
-      + 'Enter Credentials" first.'
-    );
-    return;
-  }
-
-  const mcpOk = await writeMcpConfig(
-    context.extensionPath,
-    credentials
-  );
-  if (!mcpOk) {
-    void window.showWarningMessage(
-      'Failed to write MCP config. AI Review '
-      + 'may not have full Gerrit integration.'
-    );
-  } else {
-    await enableMcpServer(agent);
-  }
-
-  await config.update(
-    'gerrit.aiReview.enabled', true
-  );
-
-  void window.showInformationMessage(
-    'AI Review enabled! Use "Gerrit: AI Review '
-    + 'Change" from the command palette or '
-    + 'click the "AI Review Change" button '
-    + 'in the Change Explorer view.'
-  );
-  log('AI Review enabled successfully');
 }
 
 // ── Prerequisite resolution ─────────────────────
 
 async function resolvePrerequisites(): Promise<
-  AgentCommand | null
+  PrerequisiteResult
 > {
   let status = await runPreflightDetailed();
 
   if (!status.nodeOk) {
     const fixed = await promptNodeUpgrade(status);
     if (!fixed) {
-      return null;
+      throw new UserCancelledError('nodeUpgrade');
     }
     status = await runPreflightDetailed();
     if (!status.nodeOk) {
-      void window.showErrorMessage(
+      throw new Error(
         `Node.js >= ${MIN_NODE_MAJOR} is still `
         + 'required. Please upgrade and retry.'
       );
-      return null;
     }
   }
 
   if (!status.cliFound) {
     const fixed = await promptCliInstall();
     if (!fixed) {
-      return null;
+      throw new UserCancelledError('cliInstall');
     }
     status = await runPreflightDetailed();
     if (!status.cliFound || !status.agent) {
-      void window.showErrorMessage(
+      throw new Error(
         'Cursor CLI is still not detected. '
         + 'Please install it and retry.'
       );
-      return null;
     }
   }
 
-  return status.agent ?? null;
+  if (!status.agent) {
+    throw new Error(
+      'Could not detect Cursor Agent CLI.'
+    );
+  }
+
+  return { agent: status.agent };
 }
 
 async function promptNodeUpgrade(

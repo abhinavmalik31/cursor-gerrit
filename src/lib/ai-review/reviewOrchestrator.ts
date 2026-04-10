@@ -147,10 +147,18 @@ async function doReview(
 
   const preflight = await runPreflight();
   if (!preflight.ok || !preflight.agent) {
-    throw new Error(
-      preflight.error
-      ?? 'AI Review prerequisites not met.'
+    const action = await window.showErrorMessage(
+      (preflight.error
+        ?? 'AI Review prerequisites not met.')
+      + ' Run "Enable AI Review" to configure.',
+      'Enable AI Review'
     );
+    if (action === 'Enable AI Review') {
+      await vscodeCommands.executeCommand(
+        'gerrit.enableAiReview'
+      );
+    }
+    return;
   }
 
   progress.report({
