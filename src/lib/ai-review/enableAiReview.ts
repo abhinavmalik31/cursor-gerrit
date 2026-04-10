@@ -1,6 +1,7 @@
 import { getGerritURLFromReviewFile } from '../credentials/enterCredentials';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
 import { GerritSecrets } from '../credentials/secrets';
+import { spawn } from 'child_process';
 import { tryExecAsync } from '../git/gitCLI';
 import { getGerritRepo } from '../gerrit/gerrit';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
@@ -20,10 +21,13 @@ import {
 import {
   AgentCommand,
   buildMcpEnableCommand,
+  buildStatusCommand,
+  buildLoginCommand,
 } from './agentCli';
 import { selectAiModel } from './modelSelector';
 import {
-  window, workspace, env, Uri, ExtensionContext,
+  window, workspace, env, Uri,
+  ExtensionContext, ProgressLocation,
 } from 'vscode';
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
@@ -149,7 +153,92 @@ async function resolvePrerequisites(): Promise<
     );
   }
 
+  const alreadyLoggedIn = await isAgentLoggedIn(
+    status.agent
+  );
+  if (!alreadyLoggedIn) {
+    const fixed = await promptAgentLogin(
+      status.agent
+    );
+    if (!fixed) {
+      throw new UserCancelledError('agentLogin');
+    }
+  }
+
   return { agent: status.agent };
+}
+
+const STATUS_TIMEOUT_MS = 5_000;
+
+async function isAgentLoggedIn(
+  agent: AgentCommand
+): Promise<boolean> {
+  const args = [...agent.baseArgs, 'status'];
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    const proc = spawn(agent.cmd, args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    const finish = (result: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      proc.kill();
+      resolve(result);
+    };
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      if (/not\s*logged\s*in/i.test(text)) {
+        finish(false);
+      } else if (/logged\s*in/i.test(text)) {
+        finish(true);
+      }
+    });
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        proc.kill();
+        reject(new Error(
+          'Timed out checking login status. '
+          + 'Please run "agent login" manually '
+          + 'in a terminal and retry.'
+        ));
+      }
+    }, STATUS_TIMEOUT_MS);
+
+    proc.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
+    proc.on('close', () => {
+      finish(false);
+    });
+  });
+}
+
+async function waitForUserDone(
+  message: string
+): Promise<void> {
+  await window.withProgress(
+    {
+      location: ProgressLocation.Notification,
+      title: message,
+      cancellable: true,
+    },
+    (_progress, token) =>
+      new Promise<void>((resolve) => {
+        token.onCancellationRequested(resolve);
+      })
+  );
 }
 
 async function promptNodeUpgrade(
@@ -177,10 +266,8 @@ async function promptNodeUpgrade(
     term.sendText(
       'nvm install --lts && nvm use --lts'
     );
-    await window.showInformationMessage(
-      'After the terminal finishes, '
-      + 'press "Done" to continue.',
-      'Done'
+    await waitForUserDone(
+      'Upgrading Node.js \u2014 cancel when done'
     );
     return true;
   }
@@ -189,10 +276,8 @@ async function promptNodeUpgrade(
     void env.openExternal(
       Uri.parse('https://nodejs.org/')
     );
-    await window.showInformationMessage(
-      'After upgrading Node.js, '
-      + 'press "Done" to continue.',
-      'Done'
+    await waitForUserDone(
+      'Upgrading Node.js \u2014 cancel when done'
     );
     return true;
   }
@@ -216,10 +301,8 @@ async function promptCliInstall(): Promise<
     );
     term.show();
     term.sendText(CLI_INSTALL_CMD);
-    await window.showInformationMessage(
-      'After the terminal finishes, '
-      + 'press "Done" to continue.',
-      'Done'
+    await waitForUserDone(
+      'Installing Cursor CLI \u2014 cancel when done'
     );
     return true;
   }
@@ -228,10 +311,8 @@ async function promptCliInstall(): Promise<
     void env.openExternal(
       Uri.parse(CLI_INSTALL_URL)
     );
-    await window.showInformationMessage(
-      'After installing the CLI, '
-      + 'press "Done" to continue.',
-      'Done'
+    await waitForUserDone(
+      'Installing Cursor CLI \u2014 cancel when done'
     );
     return true;
   }
@@ -239,6 +320,29 @@ async function promptCliInstall(): Promise<
   return false;
 }
 
+async function promptAgentLogin(
+  agent: AgentCommand
+): Promise<boolean> {
+  const pick = await window.showInformationMessage(
+    'Cursor Agent CLI requires authentication.',
+    'Login',
+    'Cancel'
+  );
+
+  if (pick === 'Login') {
+    const term = window.createTerminal(
+      'Cursor Agent Login'
+    );
+    term.show();
+    term.sendText(buildLoginCommand(agent));
+    await waitForUserDone(
+      'Logging in \u2014 cancel when done'
+    );
+    return true;
+  }
+
+  return false;
+}
 
 async function pickCheckoutBehavior(): Promise<
   CheckoutBehavior | undefined

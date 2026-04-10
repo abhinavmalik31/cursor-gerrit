@@ -13,3 +13,19 @@ export function buildMcpEnableCommand(
 	];
 	return parts.join(' ');
 }
+
+export function buildStatusCommand(
+	agent: AgentCommand
+): string {
+	return [
+		agent.cmd, ...agent.baseArgs, 'status',
+	].join(' ');
+}
+
+export function buildLoginCommand(
+	agent: AgentCommand
+): string {
+	return [
+		agent.cmd, ...agent.baseArgs, 'login',
+	].join(' ');
+}
