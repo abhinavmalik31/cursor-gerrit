@@ -76,7 +76,12 @@ async function doReview(
       increment?: number;
     }) => void;
   },
-  token: { isCancellationRequested: boolean },
+  token: {
+    isCancellationRequested: boolean;
+    onCancellationRequested: (
+      cb: () => void
+    ) => { dispose: () => void };
+  },
   changeTreeView?: ChangeTreeView
 ): Promise<void> {
   progress.report({
@@ -233,7 +238,12 @@ async function invokeCursorAgent(
       increment?: number;
     }) => void;
   },
-  token: { isCancellationRequested: boolean }
+  token: {
+    isCancellationRequested: boolean;
+    onCancellationRequested: (
+      cb: () => void
+    ) => { dispose: () => void };
+  }
 ): Promise<void> {
   const model = getDefaultModel();
   const prompt =
@@ -366,7 +376,23 @@ async function invokeCursorAgent(
       ));
     });
 
+    const cancelSub =
+      token.onCancellationRequested(() => {
+        log('AI Review cancelled by user');
+        if (oc) {
+          oc.appendLine('');
+          oc.appendLine(SEPARATOR);
+          oc.appendLine(
+            '[Cancelled by user]'
+          );
+        }
+        proc.kill();
+        settle(resolve);
+      });
+
     proc.on('exit', (code) => {
+      cancelSub.dispose();
+
       if (buffer.trim()) {
         processStreamEvent(
           buffer.trim(), oc, progress,
