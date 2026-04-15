@@ -25,10 +25,8 @@ import { log, getOutputChannel, showOutputChannel } from '../util/log';
 import { getConfiguration } from '../vscode/config';
 import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
-import {
-  runPreflight,
-  AgentCommand,
-} from './preflight';
+import { runPreflight } from './preflight';
+import { AgentCommand } from './agentCli';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 
@@ -145,14 +143,20 @@ async function doReview(
     increment: 5,
   });
 
-  const preflight = await runPreflight();
-  if (!preflight.ok || !preflight.agent) {
-    const action = await window.showErrorMessage(
-      (preflight.error
-        ?? 'AI Review prerequisites not met.')
-      + ' Run "Enable AI Review" to configure.',
-      'Enable AI Review'
-    );
+  let agent: AgentCommand;
+  try {
+    const status = await runPreflight();
+    agent = status.agent;
+  } catch (e: unknown) {
+    const msg = e instanceof Error
+      ? e.message
+      : 'AI Review prerequisites not met.';
+    const action =
+      await window.showErrorMessage(
+        msg
+        + ' Run "Enable AI Review" to configure.',
+        'Enable AI Review'
+      );
     if (action === 'Enable AI Review') {
       await vscodeCommands.executeCommand(
         'gerrit.enableAiReview'
@@ -179,7 +183,7 @@ async function doReview(
 
   try {
     await invokeCursorAgent(
-      preflight.agent,
+      agent,
       changeNumber, promptFile, progress, token
     );
   } finally {
