@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import {
 	runPreflight,
 	PreflightDeps,
+	PreflightError,
 } from '../src/lib/ai-review/preflight';
 import {
 	buildMcpEnableCommand,
@@ -28,6 +29,14 @@ describe('runPreflight', () => {
 			() => runPreflight(deps),
 			(err: Error) => {
 				assert.ok(
+					err instanceof PreflightError
+				);
+				assert.strictEqual(
+					(err as PreflightError)
+						.recoverable,
+					false
+				);
+				assert.ok(
 					err.message.includes(
 						'Node.js >= 18'
 					)
@@ -45,6 +54,14 @@ describe('runPreflight', () => {
 		await assert.rejects(
 			() => runPreflight(deps),
 			(err: Error) => {
+				assert.ok(
+					err instanceof PreflightError
+				);
+				assert.strictEqual(
+					(err as PreflightError)
+						.recoverable,
+					false
+				);
 				assert.ok(
 					err.message.includes('v17')
 				);
@@ -127,6 +144,14 @@ describe('runPreflight', () => {
 			await assert.rejects(
 				() => runPreflight(deps),
 				(err: Error) => {
+					assert.ok(
+						err instanceof PreflightError
+					);
+					assert.strictEqual(
+						(err as PreflightError)
+							.recoverable,
+						true
+					);
 					assert.ok(
 						err.message.includes(
 							'Cursor Agent CLI not found'

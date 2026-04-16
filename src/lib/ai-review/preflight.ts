@@ -10,6 +10,19 @@ export const CLI_INSTALL_URL =
 export const CLI_INSTALL_CMD =
 	'curl https://cursor.com/install -fsS | bash';
 
+export class PreflightError extends Error {
+	public readonly recoverable: boolean;
+
+	public constructor(
+		message: string,
+		recoverable: boolean
+	) {
+		super(message);
+		this.name = 'PreflightError';
+		this.recoverable = recoverable;
+	}
+}
+
 export interface PreflightStatus {
 	nodeOk: boolean;
 	nodeMajor: number;
@@ -52,12 +65,13 @@ export async function runPreflight(
 ): Promise<PreflightStatus> {
 	const nodeMajor = deps.getNodeMajor();
 	if (nodeMajor < MIN_NODE_MAJOR) {
-		throw new Error(
+		throw new PreflightError(
 			`Node.js >= ${MIN_NODE_MAJOR} is `
 			+ 'required for AI Review, but found '
 			+ `v${nodeMajor}. Please upgrade `
 			+ 'Cursor to get a newer bundled '
-			+ 'Node.js runtime.'
+			+ 'Node.js runtime.',
+			false
 		);
 	}
 
@@ -89,9 +103,10 @@ export async function runPreflight(
 		};
 	}
 
-	throw new Error(
+	throw new PreflightError(
 		'Cursor Agent CLI not found. '
 		+ `Install it with: ${CLI_INSTALL_CMD}`
-		+ `  (${CLI_INSTALL_URL})`
+		+ `  (${CLI_INSTALL_URL})`,
+		true
 	);
 }

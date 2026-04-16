@@ -25,7 +25,9 @@ import { log, getOutputChannel, showOutputChannel } from '../util/log';
 import { getConfiguration } from '../vscode/config';
 import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
-import { runPreflight } from './preflight';
+import {
+  runPreflight, PreflightError,
+} from './preflight';
 import { AgentCommand } from './agentCli';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -148,18 +150,23 @@ async function doReview(
     const status = await runPreflight();
     agent = status.agent;
   } catch (e: unknown) {
-    const msg = e instanceof Error
-      ? e.message
-      : 'AI Review prerequisites not met.';
-    const action =
+    const err = e as PreflightError;
+    if (err.recoverable) {
+      const action =
+        await window.showErrorMessage(
+          err.message
+          + ' Click "Enable AI Review"'
+          + ' to set up the CLI.',
+          'Enable AI Review'
+        );
+      if (action === 'Enable AI Review') {
+        await vscodeCommands.executeCommand(
+          'gerrit.enableAiReview'
+        );
+      }
+    } else {
       await window.showErrorMessage(
-        msg
-        + ' Run "Enable AI Review" to configure.',
-        'Enable AI Review'
-      );
-    if (action === 'Enable AI Review') {
-      await vscodeCommands.executeCommand(
-        'gerrit.enableAiReview'
+        err.message
       );
     }
     return;
