@@ -5,7 +5,7 @@
 	"version": "1.2.58",
 	"engines": {
 		"vscode": "^1.76.0",
-		"node": ">=14.16.0"
+		"node": ">=18.0.0"
 	},
 	"license": "MIT",
 	"categories": [
@@ -1057,8 +1057,7 @@
 					"id": "gerrit:changeExplorer",
 					"name": "Changes",
 					"type": "tree",
-					"visibility": "visible",
-					"when": "gerrit:isUsingGerrit"
+					"visibility": "visible"
 				},
 				{
 					"id": "gerrit:searchResults",
@@ -1084,6 +1083,16 @@
 			]
 		},
 		"viewsWelcome": [
+			{
+				"view": "gerrit:changeExplorer",
+				"contents": "Detecting Gerrit repository...",
+				"when": "!gerrit:isUsingGerrit && !gerrit:noGerritRepo"
+			},
+			{
+				"view": "gerrit:changeExplorer",
+				"contents": "No Gerrit repository detected in this workspace.\n\n[Enter Credentials](command:cmd.gerrit.enterCredentials)\n[Check Connection](command:cmd.gerrit.checkConnection)",
+				"when": "gerrit:noGerritRepo"
+			},
 			{
 				"view": "gerrit:quickCheckout",
 				"contents": "No quick checkout stashes found, create one by right-clicking a change and selecting \"Quick-Checkout\""
@@ -1570,6 +1579,7 @@
 		"package": "npm run prepack && npm exec vsce package --no-yarn",
 		"package-dev": "npm run prepush && npm run build:debug && npm exec vsce package --no-yarn",
 		"generate-package": "generate-package-json generate --name Gerrit --input src/commands/defs.ts -w -p package.json --handler src/commands/commands.ts --validate --prefix Gerrit && prettier --write package.json",
+		"test": "TS_NODE_PROJECT=tests/tsconfig.json mocha --require ts-node/register 'tests/**/*.test.ts' --timeout 10000",
 		"prepush": "npm run generate-package && npm run format-staged && npm run lint -- --fix && npm run compile"
 	},
 	"devDependencies": {
@@ -1579,7 +1589,7 @@
 		"@types/fs-extra": "^9.0.13",
 		"@types/glob": "^7.1.4",
 		"@types/mocha": "^9.0.0",
-		"@types/node": "14.x",
+		"@types/node": "18.x",
 		"@types/react": "^17.0.37",
 		"@types/react-dom": "^17.0.11",
 		"@types/vscode": "1.76",

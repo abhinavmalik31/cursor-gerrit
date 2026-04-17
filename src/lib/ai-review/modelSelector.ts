@@ -1,9 +1,9 @@
-import { window } from 'vscode';
 import { getConfiguration } from '../vscode/config';
+import { window } from 'vscode';
 
 export interface AIModel {
-  label: string;
-  id: string;
+	label: string;
+	id: string;
 }
 
 const AVAILABLE_MODELS: AIModel[] = [
@@ -16,62 +16,52 @@ const AVAILABLE_MODELS: AIModel[] = [
   { label: '$(edit) Enter custom model ID...', id: '__custom__' },
 ];
 
-export async function selectAiModel(): Promise<
-  string | undefined
-> {
-  const config = getConfiguration();
-  const currentModel = config.get(
-    'gerrit.aiReview.defaultModel', ''
-  );
+export async function selectAiModel(): Promise<string | undefined> {
+	const config = getConfiguration();
+	const currentModel = config.get('gerrit.aiReview.defaultModel', '');
 
-  const items = AVAILABLE_MODELS.map((m) => ({
-    label: m.label,
-    description: m.id === currentModel
-      ? '(current)' : undefined,
-    id: m.id,
-  }));
+	const items = AVAILABLE_MODELS.map((m) => ({
+		label: m.label,
+		description: m.id === currentModel ? '(current)' : undefined,
+		id: m.id,
+	}));
 
-  const selected = await window.showQuickPick(items, {
-    placeHolder: 'Select default AI model for reviews',
-    title: 'Gerrit: Select AI Review Model',
-  });
+	const selected = await window.showQuickPick(items, {
+		placeHolder: 'Select default AI model for reviews',
+		title: 'Gerrit: Select AI Review Model',
+	});
 
-  if (!selected) {
-    return undefined;
-  }
+	if (!selected) {
+		return undefined;
+	}
 
-  let modelId = selected.id;
+	let modelId = selected.id;
 
-  // Handle custom model entry
-  if (modelId === '__custom__') {
-    const customId = await window.showInputBox({
-      prompt: 'Enter custom model ID (e.g., gpt-5.2)',
-      placeHolder: 'model-id',
-      validateInput: (value) => {
-        if (!value || value.trim().length === 0) {
-          return 'Model ID cannot be empty';
-        }
-        return null;
-      },
-    });
+	// Handle custom model entry
+	if (modelId === '__custom__') {
+		const customId = await window.showInputBox({
+			prompt: 'Enter custom model ID (e.g., gpt-5.2)',
+			placeHolder: 'model-id',
+			validateInput: (value) => {
+				if (!value || value.trim().length === 0) {
+					return 'Model ID cannot be empty';
+				}
+				return null;
+			},
+		});
 
-    if (!customId) {
-      return undefined;
-    }
+		if (!customId) {
+			return undefined;
+		}
 
-    modelId = customId.trim();
-  }
+		modelId = customId.trim();
+	}
 
-  await config.update(
-    'gerrit.aiReview.defaultModel',
-    modelId
-  );
+	await config.update('gerrit.aiReview.defaultModel', modelId);
 
-  return modelId;
+	return modelId;
 }
 
 export function getDefaultModel(): string {
-  return getConfiguration().get(
-    'gerrit.aiReview.defaultModel', ''
-  );
+	return getConfiguration().get('gerrit.aiReview.defaultModel', '');
 }
