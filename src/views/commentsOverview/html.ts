@@ -152,7 +152,7 @@ export function buildHTML(
       Accept Selected Suggestions
     </button>
   </div>
-  ${unresolvedGroups.map((g) => renderFileGroup(g, true, true)).join('')}
+  ${unresolvedGroups.map((g) => renderFileGroup(g, true)).join('')}
 </div>`
 			: '';
 
