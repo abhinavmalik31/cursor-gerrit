@@ -55,6 +55,9 @@ export async function runAIReview(
           changeTreeView
         );
       } catch (e) {
+        if (token.isCancellationRequested) {
+          return;
+        }
         const msg = e instanceof Error
           ? e.message : String(e);
         log('AI Review failed: ' + msg);
@@ -163,10 +166,6 @@ async function doReview(
     );
   } finally {
     cleanupTempFile(promptFile);
-  }
-
-  if (token.isCancellationRequested) {
-    return;
   }
 
   progress.report({
@@ -328,7 +327,9 @@ async function invokeCursorAgent(
         );
       }
       proc.kill();
-      settle(resolve);
+      settle(reject, new Error(
+        'Timed out after 5 minutes'
+      ));
     }, TIMEOUT_MS);
 
     let lastStatus = '';
@@ -387,7 +388,7 @@ async function invokeCursorAgent(
           );
         }
         proc.kill();
-        settle(resolve);
+        settle(reject, new Error('Cancelled'));
       });
 
     proc.on('exit', (code) => {

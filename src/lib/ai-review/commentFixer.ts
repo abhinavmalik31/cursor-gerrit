@@ -285,7 +285,7 @@ function invokeCursorAgentForFix(
 				oc.appendLine('[Timed out after 5 minutes]');
 			}
 			proc.kill();
-			settle(resolve);
+			settle(reject, new Error('Timed out after 5 minutes'));
 		}, TIMEOUT_MS);
 
 		let buffer = '';
@@ -336,7 +336,7 @@ function invokeCursorAgentForFix(
 					oc.appendLine('[Cancelled by user]');
 				}
 				proc.kill();
-				settle(resolve);
+				settle(reject, new Error('Cancelled'));
 			});
 
 		proc.on('exit', (code) => {
@@ -444,6 +444,9 @@ export async function acceptSuggestion(
 					'Suggestion applied and comment resolved.'
 				);
 			} catch (e) {
+				if (token.isCancellationRequested) {
+					return;
+				}
 				const msg = e instanceof Error ? e.message : String(e);
 				log('Accept suggestion failed: ' + msg);
 				void window.showErrorMessage(
@@ -502,6 +505,9 @@ export async function acceptMultipleSuggestions(
 						'and resolved comments.'
 				);
 			} catch (e) {
+				if (token.isCancellationRequested) {
+					return;
+				}
 				const msg = e instanceof Error ? e.message : String(e);
 				log('Accept suggestions failed: ' + msg);
 				void window.showErrorMessage(

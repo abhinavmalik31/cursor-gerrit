@@ -8,7 +8,7 @@ export interface AIModel {
 
 const AVAILABLE_MODELS: AIModel[] = [
   { label: 'Auto (let Cursor decide)', id: '' },
-  { label: 'Claude 4.6 Opus', id: 'claude-4.6-opus' },
+  { label: 'Claude 4.6 Opus High', id: 'claude-4.6-opus-high' },
   { label: 'Claude 4.5 Sonnet', id: 'claude-4.5-sonnet' },
   { label: 'Claude 3.5 Sonnet', id: 'claude-3.5-sonnet' },
   { label: 'GPT-4o', id: 'gpt-4o' },
