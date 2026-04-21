@@ -72,8 +72,9 @@ same tool with the same arguments twice. If you \
 already fetched change metadata, changed files, \
 comments, or drafts — reuse the result you got.
 2. **Minimize total MCP calls.** Gather all data you \
-need in steps 1-5, then analyze, then post comments. \
-Do not interleave fetching and posting.
+need in steps 1-5 (including diffs in step 3b), then \
+analyze, then post comments. Do not interleave fetching \
+and posting.
 3. **Do not make any requests unrelated to this \
 review.** Only call the gerrit_* MCP tools listed \
 below. Do not query for other changes, browse the \
@@ -114,6 +115,51 @@ ${fileContentStep(changeNumber, checkedOut)}
 Read and understand **every changed file**. If the \
 change touches many files, prioritize non-trivial \
 source files over configs, tests, and generated files.
+
+### Step 3b: Fetch the Diff for Each Changed File (CRITICAL)
+
+For **every** changed source file you intend to comment \
+on, call \`gerrit_get_file_diff\` with:
+\`\`\`json
+{
+  "changeNumber": "${changeNumber}",
+  "filePath": "<path from step 2>"
+}
+\`\`\`
+
+The response contains a \`hunks\` array. Each hunk has:
+- \`aStart\` / \`aLines\` — 1-indexed line range on the \
+**PARENT** (pre-image) side. These lines were **deleted** \
+or **replaced** by this patchset.
+- \`bStart\` / \`bLines\` — 1-indexed line range on the \
+**REVISION** (post-image) side. These lines were **added** \
+or **modified** in this patchset.
+- \`deletedLines\` — actual text removed (parent side).
+- \`addedLines\` — actual text added (revision side).
+
+**You MUST use these hunk ranges as the source of truth \
+for line numbers in any comment you post.** Do not infer \
+line numbers from the file content alone — the file you \
+read may be longer/shorter than the patchset's view due \
+to local edits, EOL differences, or rebases.
+
+Rules for picking a comment location from a hunk:
+- Commenting on a line that was **added or modified** → \
+use \`side: "REVISION"\` (the default) and a line number \
+in \`[bStart, bStart + bLines - 1]\`.
+- Commenting on a line that was **deleted** (only exists \
+in the parent) → use \`side: "PARENT"\` and a line number \
+in \`[aStart, aStart + aLines - 1]\`.
+- Commenting on a **multi-line** region → pass \`range\` \
+with 1-indexed \`startLine\`/\`endLine\` (and 0-indexed \
+\`startCharacter\`/\`endCharacter\`, use 0 if unsure) and \
+keep the entire range inside a single hunk on a single \
+side.
+- **Never** comment on a line that is not inside any \
+hunk on the chosen side. If you want to discuss \
+unchanged surrounding code, anchor the comment to the \
+nearest changed line in the same hunk and reference the \
+unchanged code in your message.
 
 ### Step 4: Fetch Existing Comments (CRITICAL)
 
@@ -163,7 +209,11 @@ same or a related issue. If yes, use \
 \`gerrit_reply_to_comment\` instead (step 7).
 
 For genuinely new issues, post draft comments using \
-\`gerrit_post_draft_comment\`:
+\`gerrit_post_draft_comment\`. Pick the line, side, and \
+(optionally) range from the hunk you fetched in step 3b.
+
+Single-line comment on an added/modified line (REVISION \
+side, the default):
 \`\`\`json
 {
   "changeNumber": "${changeNumber}",
@@ -174,13 +224,54 @@ For genuinely new issues, post draft comments using \
 }
 \`\`\`
 
+Multi-line comment spanning a region of the new \
+revision:
+\`\`\`json
+{
+  "changeNumber": "${changeNumber}",
+  "filePath": "path/to/file.ts",
+  "range": {
+    "startLine": 345,
+    "startCharacter": 0,
+    "endLine": 360,
+    "endCharacter": 0
+  },
+  "message": "This whole block ...",
+  "unresolved": true
+}
+\`\`\`
+
+Comment on a **deleted** line (only exists on the parent \
+side — use the parent-side line number from \`aStart\`):
+\`\`\`json
+{
+  "changeNumber": "${changeNumber}",
+  "filePath": "path/to/file.ts",
+  "line": 120,
+  "side": "PARENT",
+  "message": "Removing this check loses ...",
+  "unresolved": true
+}
+\`\`\`
+
+Rules:
+- All line numbers are **1-indexed**.
+- \`side\` defaults to \`"REVISION"\`. Set it to \
+\`"PARENT"\` only for deleted lines, using a line number \
+inside an \`aStart\`/\`aLines\` range from the diff.
+- For \`range\`, \`endLine\` is **inclusive** and the \
+entire range must stay inside a single hunk on a single \
+side.
 - Always set \`unresolved\` to \`true\` for issues.
-- Omit \`line\` for file-level comments.
+- Omit \`line\` and \`range\` for file-level comments.
 - Use \`filePath\` = \`"/PATCHSET_LEVEL"\` with no \
 line number for patchset-level comments (e.g. commit \
 message feedback).
-- Only comment on lines that were actually **changed** \
-in this patchset.
+- **Only comment on lines that appear inside a hunk** \
+returned by \`gerrit_get_file_diff\` for the chosen \
+side. If your issue is about unchanged surrounding code, \
+anchor on the nearest changed line in the same hunk and \
+reference the surrounding code in the message.
 
 ### Step 7: Reply to Existing Comments (When Appropriate)
 

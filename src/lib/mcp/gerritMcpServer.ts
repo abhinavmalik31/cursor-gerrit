@@ -165,6 +165,34 @@ const TOOLS: ToolDef[] = [
 		},
 	},
 	{
+		name: 'gerrit_get_file_diff',
+		description:
+			'Get the diff for a single file in the current ' +
+			'patchset, including hunk ranges and per-line ' +
+			'side info. Use this BEFORE posting any comment ' +
+			'to know which exact lines (and which side: ' +
+			'PARENT vs REVISION) were actually changed. The ' +
+			'response includes a `hunks` array with `aStart`/' +
+			'`aLines` (PARENT side, deletions) and `bStart`/' +
+			'`bLines` (REVISION side, insertions) so you can ' +
+			'pick the correct `line`, `range`, and `side` ' +
+			'for gerrit_post_draft_comment.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				changeNumber: {
+					type: 'string',
+					description: 'Gerrit change number',
+				},
+				filePath: {
+					type: 'string',
+					description: 'Path to the file',
+				},
+			},
+			required: ['changeNumber', 'filePath'],
+		},
+	},
+	{
 		name: 'gerrit_get_comments',
 		description:
 			'Get all published comments on a change, ' + 'grouped by file.',
@@ -198,7 +226,16 @@ const TOOLS: ToolDef[] = [
 		description:
 			'Post a new draft comment on a specific file ' +
 			'and line. Use /PATCHSET_LEVEL as filePath ' +
-			'for patchset-level comments.',
+			'for patchset-level comments. Line numbers are ' +
+			'1-indexed. By default the comment attaches to ' +
+			'the REVISION (post-image) side; pass ' +
+			'`side: "PARENT"` to comment on a deleted line ' +
+			'using the parent-side line number. To highlight ' +
+			'a multi-line region, pass `range` instead of (or ' +
+			'in addition to) `line` — when both are given ' +
+			'`line` should equal `range.endLine`. Always call ' +
+			'`gerrit_get_file_diff` first to confirm the ' +
+			'exact line numbers and side.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -212,7 +249,38 @@ const TOOLS: ToolDef[] = [
 				},
 				line: {
 					type: 'number',
-					description: 'Line number (omit for file-level)',
+					description:
+						'1-indexed line number on the chosen ' +
+						'side (omit for file-level)',
+				},
+				side: {
+					type: 'string',
+					enum: ['REVISION', 'PARENT'],
+					description:
+						'Which side of the diff the line/range ' +
+						'refers to. Defaults to REVISION ' +
+						'(post-image). Use PARENT for deleted ' +
+						'lines that only exist in the parent.',
+				},
+				range: {
+					type: 'object',
+					description:
+						'Multi-line region. All fields are ' +
+						'1-indexed. `endLine` is inclusive. ' +
+						'`startCharacter` and `endCharacter` ' +
+						'are 0-indexed column offsets.',
+					properties: {
+						startLine: { type: 'number' },
+						startCharacter: { type: 'number' },
+						endLine: { type: 'number' },
+						endCharacter: { type: 'number' },
+					},
+					required: [
+						'startLine',
+						'startCharacter',
+						'endLine',
+						'endCharacter',
+					],
 				},
 				message: {
 					type: 'string',
@@ -268,6 +336,8 @@ async function handleTool(name: string, args: ToolArgs): Promise<string> {
 			return handleGetChangedFiles(args);
 		case 'gerrit_get_file_content':
 			return handleGetFileContent(args);
+		case 'gerrit_get_file_diff':
+			return handleGetFileDiff(args);
 		case 'gerrit_get_comments':
 			return handleGetComments(args);
 		case 'gerrit_get_draft_comments':
@@ -308,6 +378,151 @@ async function handleGetFileContent(args: ToolArgs): Promise<string> {
 	return decoded;
 }
 
+// Shape of a single entry in Gerrit's DiffInfo.content array.
+// See: Documentation/rest-api-changes.html#diff-content
+//   - ab:     lines unchanged on both sides
+//   - a:      lines only on side A (parent / pre-image) -> deletions
+//   - b:      lines only on side B (revision / post-image) -> additions
+//   - skip:   number of common lines elided (used for very large files)
+//   - common: when true, a/b are whitespace-only differences that the
+//             requested ignore-whitespace setting considers equal, so
+//             they should be treated as unchanged (like ab).
+// Gerrit does NOT include line numbers anywhere in this payload; they
+// must be reconstructed by walking the entries in order and keeping
+// running counters for each side. This is the same approach used by
+// PolyGerrit's own diff UI.
+interface GerritDiffContentEntry {
+	a?: string[];
+	b?: string[];
+	ab?: string[];
+	skip?: number;
+	common?: boolean;
+}
+
+interface GerritDiff {
+	change_type?: string;
+	content?: GerritDiffContentEntry[];
+}
+
+// A contiguous block of changed lines, with 1-indexed starting line
+// numbers on each side. Field names (aStart/aLines/bStart/bLines)
+// match the Gerrit "side A / side B" convention and are part of this
+// MCP tool's public response shape — do not rename without updating
+// the tool description in TOOLS as well.
+interface SimpleHunk {
+	aStart: number;
+	aLines: number;
+	bStart: number;
+	bLines: number;
+	deletedLines: string[];
+	addedLines: string[];
+}
+
+function summarizeDiff(diff: GerritDiff): {
+	changeType: string;
+	hunks: SimpleHunk[];
+} {
+	const entries = diff.content ?? [];
+	const hunks: SimpleHunk[] = [];
+
+	// 1-indexed running line numbers for each side, advanced as we
+	// walk the entries. parentLine corresponds to Gerrit "side A",
+	// revisionLine to "side B".
+	let parentLine = 1;
+	let revisionLine = 1;
+
+	// Consecutive non-common entries (a pure deletion followed by a
+	// pure addition, or vice versa) describe a single logical hunk —
+	// a "replace" — so we accumulate them into `currentHunk` and only
+	// push to `hunks` when we hit an unchanged region.
+	let currentHunk: SimpleHunk | null = null;
+
+	const finalizeHunk = (): void => {
+		if (currentHunk) {
+			hunks.push(currentHunk);
+			currentHunk = null;
+		}
+	};
+
+	for (const entry of entries) {
+		// Region is unchanged either explicitly (ab) or because
+		// `common: true` says the a/b difference is whitespace-only
+		// under the active ignore-whitespace setting.
+		const isUnchanged = entry.ab !== undefined || entry.common === true;
+		if (isUnchanged) {
+			finalizeHunk();
+			const length = (entry.ab ?? entry.a ?? entry.b ?? []).length;
+			parentLine += length;
+			revisionLine += length;
+			continue;
+		}
+
+		// Skipped common region in a truncated diff — advance both
+		// sides by the skip count without emitting a hunk.
+		if (entry.skip && entry.skip > 0) {
+			finalizeHunk();
+			parentLine += entry.skip;
+			revisionLine += entry.skip;
+			continue;
+		}
+
+		const deleted = entry.a ?? [];
+		const added = entry.b ?? [];
+
+		if (!currentHunk) {
+			currentHunk = {
+				aStart: parentLine,
+				aLines: 0,
+				bStart: revisionLine,
+				bLines: 0,
+				deletedLines: [],
+				addedLines: [],
+			};
+		}
+
+		currentHunk.aLines += deleted.length;
+		currentHunk.bLines += added.length;
+		for (const line of deleted) {
+			currentHunk.deletedLines.push(line);
+		}
+		for (const line of added) {
+			currentHunk.addedLines.push(line);
+		}
+
+		parentLine += deleted.length;
+		revisionLine += added.length;
+	}
+	finalizeHunk();
+
+	return {
+		changeType: diff.change_type ?? 'MODIFIED',
+		hunks,
+	};
+}
+
+async function handleGetFileDiff(args: ToolArgs): Promise<string> {
+	const cn = String(args.changeNumber);
+	const fp = String(args.filePath);
+	const encoded = encodeURIComponent(fp);
+	const data = (await gerritGet(
+		`changes/${cn}/revisions/current/files/${encoded}/diff`
+	)) as GerritDiff;
+
+	const summary = summarizeDiff(data);
+	const out = {
+		filePath: fp,
+		changeType: summary.changeType,
+		note:
+			'Line numbers are 1-indexed. aStart/aLines refer to ' +
+			'the PARENT (pre-image) side; bStart/bLines refer to ' +
+			'the REVISION (post-image) side. Comment on PARENT ' +
+			'for deleted lines (use side="PARENT") and on ' +
+			'REVISION for added/modified lines.',
+		hunks: summary.hunks,
+	};
+	return JSON.stringify(out, null, 2);
+}
+
 async function handleGetComments(args: ToolArgs): Promise<string> {
 	const cn = String(args.changeNumber);
 	const data = await gerritGet(`changes/${cn}/comments/`);
@@ -320,6 +535,52 @@ async function handleGetDraftComments(args: ToolArgs): Promise<string> {
 	return JSON.stringify(data, null, 2);
 }
 
+interface CommentRangeArg {
+	startLine?: unknown;
+	startCharacter?: unknown;
+	endLine?: unknown;
+	endCharacter?: unknown;
+}
+
+function normalizeRange(
+	raw: unknown
+): {
+	start_line: number;
+	start_character: number;
+	end_line: number;
+	end_character: number;
+} | null {
+	if (!raw || typeof raw !== 'object') {
+		return null;
+	}
+	const r = raw as CommentRangeArg;
+	if (
+		typeof r.startLine !== 'number' ||
+		typeof r.endLine !== 'number' ||
+		typeof r.startCharacter !== 'number' ||
+		typeof r.endCharacter !== 'number'
+	) {
+		return null;
+	}
+	return {
+		start_line: r.startLine,
+		start_character: r.startCharacter,
+		end_line: r.endLine,
+		end_character: r.endCharacter,
+	};
+}
+
+function normalizeSide(raw: unknown): 'PARENT' | 'REVISION' | null {
+	if (typeof raw !== 'string') {
+		return null;
+	}
+	const upper = raw.toUpperCase();
+	if (upper === 'PARENT' || upper === 'REVISION') {
+		return upper;
+	}
+	return null;
+}
+
 async function handlePostDraft(args: ToolArgs): Promise<string> {
 	const cn = String(args.changeNumber);
 	const body: Record<string, unknown> = {
@@ -327,9 +588,21 @@ async function handlePostDraft(args: ToolArgs): Promise<string> {
 		message: String(args.message),
 		unresolved: args.unresolved !== false,
 	};
+
+	const range = normalizeRange(args.range);
+	if (range) {
+		body.range = range;
+		body.line = range.end_line;
+	}
 	if (typeof args.line === 'number') {
 		body.line = args.line;
 	}
+
+	const side = normalizeSide(args.side);
+	if (side) {
+		body.side = side;
+	}
+
 	const data = await gerritPut(
 		`changes/${cn}/revisions/current/drafts`,
 		body
