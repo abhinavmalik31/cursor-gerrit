@@ -8,30 +8,45 @@ import {
 	ProgressLocation,
 } from 'vscode';
 import { GerritSecrets } from '../credentials/secrets';
-import { getConfiguration } from '../vscode/config';
-import { getGerritRepo } from '../gerrit/gerrit';
-import { selectAiModel } from './modelSelector';
+import { spawn } from 'child_process';
 import { tryExecAsync } from '../git/gitCLI';
+import { getGerritRepo } from '../gerrit/gerrit';
+import {
+  UserCancelledError,
+  isUserCancelledError,
+} from '../util/errors';
 import { log } from '../util/log';
+import { getConfiguration } from '../vscode/config';
+import { runPreflight } from './preflight';
+import {
+  AgentCommand,
+  buildMcpEnableCommand,
+  buildLoginCommand,
+} from './agentCli';
+import { selectAiModel } from './modelSelector';
+
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
+
+interface PrerequisiteResult {
+  agent: AgentCommand;
+}
 
 export async function enableAiReview(
   context: ExtensionContext
 ): Promise<void> {
-  const config = getConfiguration();
+  try {
+    const config = getConfiguration();
 
-  const cursorOk = await verifyCursorCli();
-  if (!cursorOk) {
-    return;
-  }
+    const { agent } =
+      await resolvePrerequisites();
 
   const modelResult = await selectAiModel();
   if (modelResult === undefined) {
     void window.showInformationMessage(
       'AI Review setup cancelled.'
     );
-    return;
+    throw new UserCancelledError('selectModel');
   }
 
   const checkoutBehavior =
@@ -92,7 +107,7 @@ export async function enableAiReview(
         increment: 30,
       });
 
-      const mcpEnabled = await enableMcpServer();
+      const mcpEnabled = await enableMcpServer(agent);
       if (!mcpEnabled) {
         return false;
       }
@@ -121,127 +136,219 @@ export async function enableAiReview(
     + 'in the Change Explorer view.'
   );
   log('AI Review enabled successfully');
-}
-
-async function verifyCursorCli(): Promise<boolean> {
-  const { success, stdout } = await tryExecAsync(
-    'which cursor',
-    { silent: true }
-  );
-
-  if (!success || !stdout.trim()) {
-    const action = await window.showErrorMessage(
-      'Cursor CLI not found. Please ensure '
-      + 'the "cursor" command is available in '
-      + 'your PATH. You can install it from '
-      + 'Cursor settings (Command Palette > '
-      + '"Install \'cursor\' command").',
-      'Retry',
-      'Cancel'
-    );
-    if (action === 'Retry') {
-      return verifyCursorCli();
+  } catch (e: unknown) {
+    if (isUserCancelledError(e)) {
+      log('AI Review setup cancelled');
+      return;
     }
-    return false;
+    const msg = e instanceof Error
+      ? e.message : String(e);
+    log('AI Review setup failed: ' + msg);
+    void window.showErrorMessage(
+      'AI Review setup failed: ' + msg
+    );
   }
-
-  log('Cursor CLI found at: ' + stdout.trim());
-  return true;
 }
 
-async function pickCheckoutBehavior(): Promise<
-  CheckoutBehavior | undefined
-> {
-  const items = [
-    {
-      label: 'Ask each time',
-      description:
-        'Prompt before each review whether '
-        + 'to checkout the change',
-      value: 'ask' as CheckoutBehavior,
-    },
-    {
-      label: 'Always checkout',
-      description:
-        'Automatically checkout for full '
-        + 'repo context',
-      value: 'always' as CheckoutBehavior,
-    },
-    {
-      label: 'Never checkout',
-      description:
-        'Review using Gerrit context only '
-        + '(no local checkout)',
-      value: 'never' as CheckoutBehavior,
-    },
-  ];
+// ── Prerequisite resolution ─────────────────────
 
-  const selected = await window.showQuickPick(
-    items, {
-    placeHolder:
-      'How should AI Review handle '
-      + 'change checkout?',
-    title: 'Gerrit: Checkout Behavior',
+async function resolvePrerequisites(): Promise<
+  PrerequisiteResult
+> {
+  const status = await runPreflight();
+
+  const alreadyLoggedIn = await isAgentLoggedIn(
+    status.agent
+  );
+  if (!alreadyLoggedIn) {
+    const fixed = await promptAgentLogin(
+      status.agent
+    );
+    if (!fixed) {
+      throw new UserCancelledError('agentLogin');
+    }
   }
+
+  return { agent: status.agent };
+}
+
+const STATUS_TIMEOUT_MS = 5_000;
+
+async function isAgentLoggedIn(
+  agent: AgentCommand
+): Promise<boolean> {
+  const args = [...agent.baseArgs, 'status'];
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    const proc = spawn(agent.cmd, args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    const finish = (result: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      proc.kill();
+      resolve(result);
+    };
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      if (/not\s*logged\s*in/i.test(text)) {
+        finish(false);
+      } else if (/logged\s*in/i.test(text)) {
+        finish(true);
+      }
+    });
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        proc.kill();
+        reject(new Error(
+          'Timed out checking login status. '
+          + 'Please run "agent login" manually '
+          + 'in a terminal and retry.'
+        ));
+      }
+    }, STATUS_TIMEOUT_MS);
+
+    proc.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
+
+    proc.on('close', () => {
+      finish(false);
+    });
+  });
+}
+
+async function waitForUserDone(
+  message: string
+): Promise<void> {
+  await window.withProgress(
+    {
+      location: ProgressLocation.Notification,
+      title: message,
+      cancellable: true,
+    },
+    (_progress, token) =>
+      new Promise<void>((resolve) => {
+        token.onCancellationRequested(resolve);
+      })
+  );
+}
+
+async function promptAgentLogin(
+  agent: AgentCommand
+): Promise<boolean> {
+  const pick = await window.showInformationMessage(
+    'Cursor Agent CLI requires authentication.',
+    'Login',
+    'Cancel'
   );
 
-  return selected?.value;
+  if (pick === 'Login') {
+    const term = window.createTerminal(
+      'Cursor Agent Login'
+    );
+    term.show();
+    term.sendText(buildLoginCommand(agent));
+    await waitForUserDone(
+      'Logging in \u2014 cancel when done'
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function pickCheckoutBehavior(): Promise<CheckoutBehavior | undefined> {
+	const items = [
+		{
+			label: 'Ask each time',
+			description:
+				'Prompt before each review whether ' + 'to checkout the change',
+			value: 'ask' as CheckoutBehavior,
+		},
+		{
+			label: 'Always checkout',
+			description: 'Automatically checkout for full ' + 'repo context',
+			value: 'always' as CheckoutBehavior,
+		},
+		{
+			label: 'Never checkout',
+			description:
+				'Review using Gerrit context only ' + '(no local checkout)',
+			value: 'never' as CheckoutBehavior,
+		},
+	];
+
+	const selected = await window.showQuickPick(items, {
+		placeHolder: 'How should AI Review handle ' + 'change checkout?',
+		title: 'Gerrit: Checkout Behavior',
+	});
+
+	return selected?.value;
 }
 
 async function extractCredentials(
-  context: ExtensionContext
+	context: ExtensionContext
 ): Promise<GerritCredentials | null> {
-  const config = getConfiguration();
-  const gerritRepo = await getGerritRepo(context);
-  const gitReviewFile = gerritRepo
-    ? await getGitReviewFileCached(gerritRepo)
-    : null;
+	const config = getConfiguration();
+	const gerritRepo = await getGerritRepo(context);
+	const gitReviewFile = gerritRepo
+		? await getGitReviewFileCached(gerritRepo)
+		: null;
 
-  const url = getGerritURLFromReviewFile(
-    gitReviewFile
-  );
-  if (!url) {
-    return null;
-  }
+	const url = getGerritURLFromReviewFile(gitReviewFile);
+	if (!url) {
+		return null;
+	}
 
-  const username =
-    config.get('gerrit.auth.username') ?? '';
-  const password =
-    await GerritSecrets.getForUrlOrWorkspace(
-      'password',
-      url,
-      workspace.workspaceFolders?.[0]?.uri
-    );
-  const cookie =
-    await GerritSecrets.getForUrlOrWorkspace(
-      'cookie',
-      url,
-      workspace.workspaceFolders?.[0]?.uri
-    );
-  const authPrefix = config.get(
-    'gerrit.customAuthUrlPrefix',
-    'a/'
-  );
+	const username = config.get('gerrit.auth.username') ?? '';
+	const password = await GerritSecrets.getForUrlOrWorkspace(
+		'password',
+		url,
+		workspace.workspaceFolders?.[0]?.uri
+	);
+	const cookie = await GerritSecrets.getForUrlOrWorkspace(
+		'cookie',
+		url,
+		workspace.workspaceFolders?.[0]?.uri
+	);
+	const authPrefix = config.get('gerrit.customAuthUrlPrefix', 'a/');
 
-  if (!username && !password && !cookie) {
-    return null;
-  }
+	if (!username && !password && !cookie) {
+		return null;
+	}
 
-  return {
-    url,
-    username,
-    password: password ?? '',
-    authCookie: cookie ?? undefined,
-    authPrefix,
-  };
+	return {
+		url,
+		username,
+		password: password ?? '',
+		authCookie: cookie ?? undefined,
+		authPrefix,
+	};
 }
 
-async function enableMcpServer(): Promise<boolean> {
+async function enableMcpServer(
+  agent: AgentCommand
+): Promise<boolean> {
   const cwd =
     workspace.workspaceFolders?.[0]?.uri.fsPath;
 
+  const cmd = buildMcpEnableCommand(
+    agent, 'gerrit-review'
+  );
   const { success, stderr } = await tryExecAsync(
-    'cursor agent mcp enable gerrit-review',
+    cmd,
     { silent: true, cwd }
   );
 
@@ -264,7 +371,7 @@ async function enableMcpServer(): Promise<boolean> {
   );
 
   if (action === 'Retry') {
-    return enableMcpServer();
+    return enableMcpServer(agent);
   }
 
   return action === 'Continue Anyway';
