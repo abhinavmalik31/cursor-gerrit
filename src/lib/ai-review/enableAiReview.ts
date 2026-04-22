@@ -1,34 +1,30 @@
 import { getGerritURLFromReviewFile } from '../credentials/enterCredentials';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
+import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
+import {
+	window,
+	workspace,
+	ExtensionContext,
+	ProgressLocation,
+} from 'vscode';
 import { GerritSecrets } from '../credentials/secrets';
 import { spawn } from 'child_process';
 import { tryExecAsync } from '../git/gitCLI';
 import { getGerritRepo } from '../gerrit/gerrit';
-import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import {
   UserCancelledError,
   isUserCancelledError,
 } from '../util/errors';
 import { log } from '../util/log';
 import { getConfiguration } from '../vscode/config';
-import {
-  runPreflightDetailed,
-  PreflightStatus,
-  MIN_NODE_MAJOR,
-  CLI_INSTALL_CMD,
-  CLI_INSTALL_URL,
-} from './preflight';
+import { runPreflight } from './preflight';
 import {
   AgentCommand,
   buildMcpEnableCommand,
-  buildStatusCommand,
   buildLoginCommand,
 } from './agentCli';
 import { selectAiModel } from './modelSelector';
-import {
-  window, workspace, env, Uri,
-  ExtensionContext, ProgressLocation,
-} from 'vscode';
+
 
 type CheckoutBehavior = 'ask' | 'always' | 'never';
 
@@ -45,59 +41,101 @@ export async function enableAiReview(
     const { agent } =
       await resolvePrerequisites();
 
-    const modelResult = await selectAiModel();
-    if (modelResult === undefined) {
-      throw new UserCancelledError('selectModel');
-    }
-
-    const checkoutBehavior =
-      await pickCheckoutBehavior();
-    if (!checkoutBehavior) {
-      throw new UserCancelledError(
-        'checkoutBehavior'
-      );
-    }
-
-    await config.update(
-      'gerrit.aiReview.checkoutBehavior',
-      checkoutBehavior
-    );
-
-    const credentials = await extractCredentials(
-      context
-    );
-    if (!credentials) {
-      throw new Error(
-        'Could not extract Gerrit credentials. '
-        + 'Please configure them via "Gerrit: '
-        + 'Enter Credentials" first.'
-      );
-    }
-
-    const mcpOk = await writeMcpConfig(
-      context.extensionPath,
-      credentials
-    );
-    if (!mcpOk) {
-      void window.showWarningMessage(
-        'Failed to write MCP config. AI Review '
-        + 'may not have full Gerrit integration.'
-      );
-    } else {
-      await enableMcpServer(agent);
-    }
-
-    await config.update(
-      'gerrit.aiReview.enabled', true
-    );
-
+  const modelResult = await selectAiModel();
+  if (modelResult === undefined) {
     void window.showInformationMessage(
-      'AI Review enabled! Use "Gerrit: AI Review '
-      + 'Change" from the command palette or '
-      + 'click the "AI Review Change" button '
-      + 'in the Change Explorer view.'
+      'AI Review setup cancelled.'
     );
-    log('AI Review enabled successfully');
+    throw new UserCancelledError('selectModel');
+  }
+
+  const checkoutBehavior =
+    await pickCheckoutBehavior();
+  if (!checkoutBehavior) {
+    void window.showInformationMessage(
+      'AI Review setup cancelled.'
+    );
+    return;
+  }
+
+  await config.update(
+    'gerrit.aiReview.checkoutBehavior',
+    checkoutBehavior
+  );
+
+  const ok = await window.withProgress(
+    {
+      location: ProgressLocation.Notification,
+      title: 'Gerrit: Setting up AI Review',
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({
+        message: 'Extracting credentials...',
+      });
+
+      const credentials =
+        await extractCredentials(context);
+      if (!credentials) {
+        void window.showWarningMessage(
+          'Could not extract Gerrit credentials. '
+          + 'Please configure them via "Gerrit: '
+          + 'Enter Credentials" first.'
+        );
+        return false;
+      }
+
+      progress.report({
+        message: 'Writing MCP configuration...',
+        increment: 30,
+      });
+
+      const mcpOk = await writeMcpConfig(
+        context.extensionPath,
+        credentials
+      );
+      if (!mcpOk) {
+        void window.showWarningMessage(
+          'Failed to write MCP config. AI Review '
+          + 'may not have full Gerrit integration.'
+        );
+        return false;
+      }
+
+      progress.report({
+        message: 'Enabling MCP server...',
+        increment: 30,
+      });
+
+      const mcpEnabled = await enableMcpServer(agent);
+      if (!mcpEnabled) {
+        return false;
+      }
+
+      progress.report({
+        message: 'Finalizing...',
+        increment: 30,
+      });
+
+      await config.update(
+        'gerrit.aiReview.enabled', true
+      );
+
+      return true;
+    }
+  );
+
+  if (!ok) {
+    return;
+  }
+
+  void window.showInformationMessage(
+    'AI Review enabled! Use "Gerrit: AI Review '
+    + 'Change" from the command palette or '
+    + 'click the "AI Review Change" button '
+    + 'in the Change Explorer view.'
+  );
+  log('AI Review enabled successfully');
   } catch (e: unknown) {
     if (isUserCancelledError(e)) {
       log('AI Review setup cancelled');
@@ -117,41 +155,7 @@ export async function enableAiReview(
 async function resolvePrerequisites(): Promise<
   PrerequisiteResult
 > {
-  let status = await runPreflightDetailed();
-
-  if (!status.nodeOk) {
-    const fixed = await promptNodeUpgrade(status);
-    if (!fixed) {
-      throw new UserCancelledError('nodeUpgrade');
-    }
-    status = await runPreflightDetailed();
-    if (!status.nodeOk) {
-      throw new Error(
-        `Node.js >= ${MIN_NODE_MAJOR} is still `
-        + 'required. Please upgrade and retry.'
-      );
-    }
-  }
-
-  if (!status.cliFound) {
-    const fixed = await promptCliInstall();
-    if (!fixed) {
-      throw new UserCancelledError('cliInstall');
-    }
-    status = await runPreflightDetailed();
-    if (!status.cliFound || !status.agent) {
-      throw new Error(
-        'Cursor CLI is still not detected. '
-        + 'Please install it and retry.'
-      );
-    }
-  }
-
-  if (!status.agent) {
-    throw new Error(
-      'Could not detect Cursor Agent CLI.'
-    );
-  }
+  const status = await runPreflight();
 
   const alreadyLoggedIn = await isAgentLoggedIn(
     status.agent
@@ -239,85 +243,6 @@ async function waitForUserDone(
         token.onCancellationRequested(resolve);
       })
   );
-}
-
-async function promptNodeUpgrade(
-  status: PreflightStatus
-): Promise<boolean> {
-  const actions: string[] = [
-    'Open nodejs.org',
-  ];
-  if (status.hasNvm) {
-    actions.unshift('Run nvm install --lts');
-  }
-  actions.push('Cancel');
-
-  const pick = await window.showWarningMessage(
-    `Node.js >= ${MIN_NODE_MAJOR} is required, `
-    + `but found v${status.nodeMajor}.`,
-    ...actions
-  );
-
-  if (pick === 'Run nvm install --lts') {
-    const term = window.createTerminal(
-      'Node Upgrade'
-    );
-    term.show();
-    term.sendText(
-      'nvm install --lts && nvm use --lts'
-    );
-    await waitForUserDone(
-      'Upgrading Node.js \u2014 cancel when done'
-    );
-    return true;
-  }
-
-  if (pick === 'Open nodejs.org') {
-    void env.openExternal(
-      Uri.parse('https://nodejs.org/')
-    );
-    await waitForUserDone(
-      'Upgrading Node.js \u2014 cancel when done'
-    );
-    return true;
-  }
-
-  return false;
-}
-
-async function promptCliInstall(): Promise<
-  boolean
-> {
-  const pick = await window.showWarningMessage(
-    'Cursor Agent CLI not found.',
-    'Install Now',
-    'Show Instructions',
-    'Cancel'
-  );
-
-  if (pick === 'Install Now') {
-    const term = window.createTerminal(
-      'Cursor CLI Install'
-    );
-    term.show();
-    term.sendText(CLI_INSTALL_CMD);
-    await waitForUserDone(
-      'Installing Cursor CLI \u2014 cancel when done'
-    );
-    return true;
-  }
-
-  if (pick === 'Show Instructions') {
-    void env.openExternal(
-      Uri.parse(CLI_INSTALL_URL)
-    );
-    await waitForUserDone(
-      'Installing Cursor CLI \u2014 cancel when done'
-    );
-    return true;
-  }
-
-  return false;
 }
 
 async function promptAgentLogin(
@@ -415,7 +340,7 @@ async function extractCredentials(
 
 async function enableMcpServer(
   agent: AgentCommand
-): Promise<void> {
+): Promise<boolean> {
   const cwd =
     workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -429,10 +354,25 @@ async function enableMcpServer(
 
   if (success) {
     log('MCP server auto-approved');
-  } else {
-    log(
-      'Could not auto-approve MCP server: '
-      + stderr
-    );
+    return true;
   }
+
+  log(
+    'Could not auto-approve MCP server: '
+    + stderr
+  );
+
+  const action = await window.showWarningMessage(
+    'Failed to auto-enable the MCP server. '
+    + 'You may need to enable "gerrit-review" '
+    + 'manually in Cursor MCP settings.',
+    'Retry',
+    'Continue Anyway'
+  );
+
+  if (action === 'Retry') {
+    return enableMcpServer(agent);
+  }
+
+  return action === 'Continue Anyway';
 }
