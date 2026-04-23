@@ -62,10 +62,6 @@ export abstract class GerritCommentBase
 		return this.getContextValues().join(',');
 	}
 
-	public get label(): string {
-		return "- PatchSet: " + this.patchSet?.toString()
-	}
-
 	public get body(): string {
 		return this.message ?? '';
 	}
@@ -169,7 +165,7 @@ export class GerritComment extends GerritCommentBase {
 		return {
 			name: `${authorName} @ ${this.updated.format({
 				dateStyle: 'short',
-			})}`,
+			})} - PatchSet: ${this.patchSet?.toString()}`,
 		};
 	}
 
