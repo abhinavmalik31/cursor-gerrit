@@ -62,6 +62,10 @@ export abstract class GerritCommentBase
 		return this.getContextValues().join(',');
 	}
 
+	public get label(): string {
+		return "- PatchSet: " + this.patchSet?.toString()
+	}
+
 	public get body(): string {
 		return this.message ?? '';
 	}
