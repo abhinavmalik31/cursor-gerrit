@@ -335,7 +335,8 @@ export async function recursiveRebase(gerritRepo: Repository): Promise<void> {
 					changeNum,
 					'latest',
 					'origin',
-					gerritRepo.rootUri.fsPath
+					gerritRepo.rootUri.fsPath,
+					gerritRepo
 				);
 				if (token.isCancellationRequested) {
 					return;

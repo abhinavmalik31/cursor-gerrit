@@ -84,8 +84,12 @@ import { openOnGitiles } from '../lib/gitiles/gitiles';
 import { commands as vscodeCommands } from 'vscode';
 import { commands, GerritCodicons } from './defs';
 
-async function checkoutChange(uri: string, changeID: string): Promise<boolean> {
+async function checkoutChange(
+	gerritRepo: Repository,
+	changeID: string
+): Promise<boolean> {
 	const changeNum = getChangeIDFromCheckoutString(changeID);
+	const uri = gerritRepo.rootUri.fsPath;
 
 	return await window.withProgress(
 		{
@@ -103,7 +107,8 @@ async function checkoutChange(uri: string, changeID: string): Promise<boolean> {
 				changeNum,
 				'latest',
 				'origin',
-				uri
+				uri,
+				gerritRepo
 			);
 
 			if (!result.success) {
@@ -428,10 +433,9 @@ export function registerCommands(
 		registerCommand(
 			GerritExtensionCommands.REBASE,
 			async (changeTreeView: ChangeTreeView) => {
-				const gitURI = gerritRepo.rootUri.fsPath;
 				if (
 					!(await checkoutChange(
-						gitURI,
+						gerritRepo,
 						changeTreeView.initialChange.changeID
 					))
 				) {
@@ -453,10 +457,9 @@ export function registerCommands(
 		registerCommand(
 			GerritExtensionCommands.RECURSIVE_REBASE,
 			async (changeTreeView: ChangeTreeView) => {
-				const gitURI = gerritRepo.rootUri.fsPath;
 				if (
 					!(await checkoutChange(
-						gitURI,
+						gerritRepo,
 						changeTreeView.initialChange.changeID
 					))
 				) {

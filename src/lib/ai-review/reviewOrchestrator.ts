@@ -124,7 +124,8 @@ async function doReview(
         changeNumber,
         'latest',
         'origin',
-        gerritRepo.rootUri.fsPath
+        gerritRepo.rootUri.fsPath,
+        gerritRepo
       );
       if (!result.success) {
         throw new Error(
