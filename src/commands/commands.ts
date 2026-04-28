@@ -612,41 +612,11 @@ export function registerCommands(
 	context.subscriptions.push(
 		registerCommand(
 			GerritExtensionCommands.COMMENTS_OVERVIEW,
-			async (changeTreeView?: ChangeTreeView) => {
-				// When invoked from the Command Palette
-				// no ChangeTreeView is supplied, so fall
-				// back to the currently checked-out change.
-				if (changeTreeView) {
-					await showCommentsOverview(
-						changeTreeView.initialChange.number.toString(),
-						gerritRepo
-					);
-					return;
-				}
-
-				const changeID = await getCurrentChangeID(gerritRepo);
-				if (!changeID) {
-					void window.showErrorMessage(
-						'No Gerrit change is currently' +
-							' checked out. Open a change' +
-							' from the Gerrit panel first.'
-					);
-					return;
-				}
-
-				const change = await GerritChange.getChangeOnce(changeID);
-				if (!change) {
-					void window.showErrorMessage(
-						'Failed to find current Gerrit change'
-					);
-					return;
-				}
-
-				await showCommentsOverview(
-					change.number.toString(),
+			(changeTreeView: ChangeTreeView) =>
+				showCommentsOverview(
+					changeTreeView.initialChange.number.toString(),
 					gerritRepo
-				);
-			}
+				)
 		)
 	);
 
