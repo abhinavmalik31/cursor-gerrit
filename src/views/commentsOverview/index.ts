@@ -20,9 +20,13 @@ import {
 	CommentMap,
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
+import { GerritRevision } from '../../lib/gerrit/gerritAPI/gerritRevision';
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
-import { CommentManager } from '../../providers/commentProvider';
+import {
+	CommentManager,
+	DocumentCommentManager,
+} from '../../providers/commentProvider';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
 import { buildHTML, OverviewComment, FileGroup } from './html';
 import { Repository } from '../../types/vscode-extension-git';
@@ -168,6 +172,80 @@ async function updatePanel(
 		unresolvedGroups,
 		olderPatchsetGroups
 	);
+
+	if (currentRevision && olderPatchsetGroups.length > 0) {
+		void warmOlderPatchsetFiles(
+			change,
+			currentRevision,
+			olderPatchsetGroups
+		);
+	}
+}
+
+function collectPatchSetNumbers(
+	groups: FileGroup[]
+): Set<number> {
+	const patchSets = new Set<number>();
+	for (const g of groups) {
+		for (const c of g.comments) {
+			if (typeof c.patchSet === 'number') {
+				patchSets.add(c.patchSet);
+			}
+		}
+	}
+	return patchSets;
+}
+
+function findOlderRevision(
+	change: GerritChange,
+	patchSetNumber: number,
+	currentRevision: GerritRevision
+): GerritRevision | null {
+	const revisions = change._revisions;
+	if (!revisions) {
+		return null;
+	}
+	const rev = Object.values(revisions).find(
+		(r) => r.number === patchSetNumber
+	);
+	if (!rev || rev.revisionID === currentRevision.revisionID) {
+		return null;
+	}
+	return rev;
+}
+
+/**
+ * Pre-fetch the inter-patchset file lists for
+ * every distinct older patchset that has comments
+ * so the first navigate click is instant.
+ */
+async function warmOlderPatchsetFiles(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	olderGroups: FileGroup[]
+): Promise<void> {
+	const patchSets = collectPatchSetNumbers(olderGroups);
+
+	await Promise.all(
+		Array.from(patchSets).map(async (ps) => {
+			const oldRev = findOlderRevision(
+				change, ps, currentRevision
+			);
+			if (!oldRev) {
+				return;
+			}
+			try {
+				const sub =
+					await currentRevision.files({
+						id: oldRev.revisionID,
+						number: oldRev.number,
+					});
+				await sub.getValue();
+			} catch {
+				// ignore warmup errors
+			}
+		})
+	);
 }
 
 /**
@@ -233,6 +311,34 @@ async function prefetchFileDiffContent(
 				// ignore pre-fetch errors
 			}
 		})
+	);
+}
+
+/**
+ * Check whether a file changed between an older
+ * patchset and the current revision by querying
+ * Gerrit's inter-patchset diff (files?base=).
+ */
+async function fileChangedSince(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	oldPatchSet: number,
+	filePath: string
+): Promise<boolean> {
+	const oldRev = findOlderRevision(
+		change, oldPatchSet, currentRevision
+	);
+	if (!oldRev) {
+		return false;
+	}
+	const filesSub = await currentRevision.files({
+		id: oldRev.revisionID,
+		number: oldRev.number,
+	});
+	const changedFiles = await filesSub.getValue();
+	return Object.prototype.hasOwnProperty.call(
+		changedFiles,
+		filePath
 	);
 }
 
@@ -422,6 +528,167 @@ function groupComments(
 	};
 }
 
+/**
+ * Determine the target line for navigation and
+ * whether the file has changed since the comment's
+ * patchset.
+ */
+async function resolveOlderPatchsetLine(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	patchSet: number | undefined,
+	line: number | undefined,
+	filePath: string,
+	currentPatchSetNumber: number
+): Promise<{ lineToJump: number | undefined; fileChanged: boolean }> {
+	const isOlderPatchset =
+		typeof patchSet === 'number' &&
+		currentPatchSetNumber > 0 &&
+		patchSet !== currentPatchSetNumber;
+
+	if (!isOlderPatchset) {
+		return { lineToJump: line, fileChanged: false };
+	}
+
+	let fileChanged = false;
+	try {
+		fileChanged = await fileChangedSince(
+			change,
+			currentRevision,
+			patchSet!,
+			filePath
+		);
+	} catch {
+		fileChanged = false;
+	}
+
+	return {
+		lineToJump: fileChanged ? undefined : line,
+		fileChanged,
+	};
+}
+
+function resolveGerritFile(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	filePath: string
+): GerritFile {
+	const revDesc = {
+		id: currentRevision.revisionID,
+		number: currentRevision.number,
+	};
+	return (
+		currentRevision._files?.[filePath] ??
+		new GerritFile(
+			change.changeID,
+			change.project,
+			revDesc,
+			filePath,
+			{
+				lines_inserted: 0,
+				lines_deleted: 0,
+				size_delta: 0,
+				size: 0,
+				old_path: undefined,
+			}
+		)
+	);
+}
+
+async function openDiffAndGetUris(
+	gerritRepo: Repository,
+	file: GerritFile,
+	filePath: string
+): Promise<{ leftUri: Uri; rightUri: Uri } | null> {
+	const diffCmd = await FileTreeView.createDiffCommand(
+		gerritRepo,
+		file,
+		null
+	);
+	if (!diffCmd?.arguments) {
+		log('navigateToComment: diff command' + ' failed for ' + filePath);
+		return null;
+	}
+
+	const [leftUri, rightUri] = diffCmd.arguments as [Uri, Uri];
+
+	await vscodeCommands.executeCommand(
+		diffCmd.command,
+		...(diffCmd.arguments as unknown[])
+	);
+
+	return { leftUri, rightUri };
+}
+
+async function scrollToLine(lineToJump: number): Promise<void> {
+	await vscodeCommands.executeCommand(
+		'workbench.action.focusActiveEditorGroup'
+	);
+	await vscodeCommands.executeCommand('revealLine', {
+		lineNumber: lineToJump - 1,
+		at: 'center',
+	});
+}
+
+/**
+ * Poll until a DocumentCommentManager exists for
+ * one of the diff URIs, then load its comments.
+ */
+async function waitForCommentManager(
+	leftUri: Uri,
+	rightUri: Uri
+): Promise<void> {
+	const findMgr = (): DocumentCommentManager | null =>
+		CommentManager.getFileManagerForUri(rightUri) ??
+		CommentManager.getFileManagerForUri(leftUri);
+
+	let mgr = findMgr();
+	if (!mgr) {
+		for (let i = 0; i < 30; i++) {
+			await new Promise((r) => setTimeout(r, 50));
+			mgr = findMgr();
+			if (mgr) {
+				break;
+			}
+		}
+	}
+
+	if (mgr) {
+		await mgr.loadComments();
+	}
+}
+
+function expandThreadAtLine(
+	changeID: string,
+	leftUri: Uri,
+	rightUri: Uri,
+	lineToJump: number
+): void {
+	const expand = (
+		mgr: DocumentCommentManager | null
+	): void => {
+		if (!mgr) {
+			return;
+		}
+		for (const t of mgr.createdThreads) {
+			if (t.range.start.line === lineToJump - 1) {
+				t.collapsibleState =
+					CommentThreadCollapsibleState.Expanded;
+			}
+		}
+	};
+
+	expand(CommentManager.getFileManagerForUri(rightUri));
+	expand(CommentManager.getFileManagerForUri(leftUri));
+
+	const managers = CommentManager.getFileManagersForChangeID(
+		changeID
+	);
+	for (const m of managers) {
+		expand(m);
+	}
+}
+
 async function navigateToComment(
 	filePath: string,
 	line: number | undefined,
@@ -429,22 +696,6 @@ async function navigateToComment(
 	gerritRepo: Repository
 ): Promise<void> {
 	if (filePath === '/PATCHSET_LEVEL') {
-		return;
-	}
-
-	// Block navigation for comments from a
-	// different patchset.
-	if (
-		typeof patchSet === 'number' &&
-		activePatchSetNumber > 0 &&
-		patchSet !== activePatchSetNumber
-	) {
-		void window.showInformationMessage(
-			`This comment is from patchset ${patchSet}` +
-				` (current: ${activePatchSetNumber}).` +
-				' Navigation is only available for' +
-				' current patchset comments.'
-		);
 		return;
 	}
 
@@ -461,103 +712,56 @@ async function navigateToComment(
 			return;
 		}
 
-		const revDesc = {
-			id: currentRevision.revisionID,
-			number: currentRevision.number,
-		};
+		const { lineToJump, fileChanged } =
+			await resolveOlderPatchsetLine(
+				change,
+				currentRevision,
+				patchSet,
+				line,
+				filePath,
+				activePatchSetNumber
+			);
 
-		const file =
-			currentRevision._files?.[filePath] ??
-			new GerritFile(change.changeID, change.project, revDesc, filePath, {
-				lines_inserted: 0,
-				lines_deleted: 0,
-				size_delta: 0,
-				size: 0,
-				old_path: undefined,
-			});
+		const file = resolveGerritFile(
+			change,
+			currentRevision,
+			filePath
+		);
 
-		const diffCmd = await FileTreeView.createDiffCommand(
+		const uris = await openDiffAndGetUris(
 			gerritRepo,
 			file,
-			null
+			filePath
 		);
-		if (!diffCmd?.arguments) {
-			log('navigateToComment: diff command' + ' failed for ' + filePath);
+		if (!uris) {
 			return;
 		}
 
-		const [leftUri, rightUri] = diffCmd.arguments as [Uri, Uri];
+		if (fileChanged) {
+			void window.showWarningMessage(
+				`Comment is from patchset ${patchSet}` +
+					` (current: ${activePatchSetNumber}).` +
+					` This file changed since then` +
+					` \u2014 the line may have shifted.`
+			);
+		}
 
-		await vscodeCommands.executeCommand(
-			diffCmd.command,
-			...(diffCmd.arguments as unknown[])
+		if (lineToJump) {
+			await scrollToLine(lineToJump);
+		}
+
+		await waitForCommentManager(
+			uris.leftUri,
+			uris.rightUri
 		);
 
-		// Immediately navigate to the line so the
-		// user sees the right location while
-		// comments load in the background.
-		if (line) {
-			await vscodeCommands.executeCommand(
-				'workbench.action.focusActiveEditorGroup'
+		if (lineToJump) {
+			expandThreadAtLine(
+				change.changeID,
+				uris.leftUri,
+				uris.rightUri,
+				lineToJump
 			);
-			await vscodeCommands.executeCommand('revealLine', {
-				lineNumber: line - 1,
-				at: 'center',
-			});
-		}
-
-		// Poll until provideCommentingRanges has
-		// fired and a DocumentCommentManager exists
-		// for one of the diff URIs. Use short ticks
-		// since data is cached - the manager should
-		// appear quickly.
-		const findMgr = ():
-			| import('../../providers/commentProvider').DocumentCommentManager
-			| null =>
-			CommentManager.getFileManagerForUri(rightUri) ??
-			CommentManager.getFileManagerForUri(leftUri);
-
-		let loadedMgr = findMgr();
-		if (!loadedMgr) {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((r) => setTimeout(r, 50));
-				loadedMgr = findMgr();
-				if (loadedMgr) {
-					break;
-				}
-			}
-		}
-
-		if (loadedMgr) {
-			await loadedMgr.loadComments();
-		}
-
-		if (line) {
-			const expandAtLine = (
-				mgr:
-					| import('../../providers/commentProvider').DocumentCommentManager
-					| null
-			): void => {
-				if (!mgr) {
-					return;
-				}
-				for (const t of mgr.createdThreads) {
-					if (t.range.start.line === line - 1) {
-						t.collapsibleState =
-							CommentThreadCollapsibleState.Expanded;
-					}
-				}
-			};
-
-			expandAtLine(CommentManager.getFileManagerForUri(rightUri));
-			expandAtLine(CommentManager.getFileManagerForUri(leftUri));
-
-			const managers = CommentManager.getFileManagersForChangeID(
-				change.changeID
-			);
-			for (const m of managers) {
-				expandAtLine(m);
-			}
 		}
 	} catch (e) {
 		log('Failed to navigate to comment: ' + String(e));

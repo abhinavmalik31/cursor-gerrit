@@ -104,11 +104,7 @@ h2 {
 	opacity: 0.6;
 }
 .comment-row.older-patchset {
-	cursor: default;
 	opacity: 0.6;
-}
-.comment-row.older-patchset:hover {
-	background: inherit;
 }
 .badge.older-ps {
 	background: var(--vscode-descriptionForeground);
