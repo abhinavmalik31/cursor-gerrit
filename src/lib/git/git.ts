@@ -18,6 +18,7 @@ import { PERIODICAL_GIT_FETCH_INTERVAL } from '../util/constants';
 import { MATCH_ANY } from '../subscriptions/baseSubscriptions';
 import { Repository } from '../../types/vscode-extension-git';
 import { getCurrentChangeID, isGerritCommit } from './commit';
+import { makeGerritAskpassForRemote } from './gerritAskpass';
 import { createAwaitingInterval, wait } from '../util/util';
 import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 import { getConfiguration } from '../vscode/config';
@@ -330,7 +331,8 @@ export async function gitFetchAndCheckoutChange(
 	changeNumber: number | string,
 	patchSet: number | 'latest' = 'latest',
 	remote: string = 'origin',
-	cwd: string
+	cwd: string,
+	gerritRepo?: Repository
 ): Promise<{ success: boolean; stdout: string; stderr: string }> {
 	const changeNum = String(changeNumber);
 	const last2Digits = changeNum.slice(-2);
@@ -392,32 +394,104 @@ export async function gitFetchAndCheckoutChange(
 	const refspec = `refs/changes/${last2Digits}/${changeNum}/${patchSetNum}`;
 	log(`Fetching change ${changeNum} patchset ${patchSetNum} from ${remote}`);
 
-	// Fetch the change
-	const fetchResult = await tryExecAsync(`git fetch ${remote} ${refspec}`, {
-		cwd,
-	});
+	// Build a per-invocation askpass shim if the
+	// remote is the configured Gerrit host and we
+	// have credentials in SecretStorage. Falls back
+	// to git's normal credential discovery otherwise.
+	const askpass = gerritRepo
+		? await makeGerritAskpassForRemote(gerritRepo, remote)
+		: null;
+	try {
+		const fetchResult = await tryExecAsync(
+			`git fetch ${remote} ${refspec}`,
+			{
+				cwd,
+				env: askpass
+					? { ...process.env, ...askpass.env }
+					: undefined,
+			}
+		);
 
-	if (!fetchResult.success) {
-		log(`Failed to fetch change: ${fetchResult.stderr}`);
-		return fetchResult;
+		if (!fetchResult.success) {
+			log(`Failed to fetch change: ${fetchResult.stderr}`);
+			if (looksLikeMissingCredentials(fetchResult.stderr)) {
+				return {
+					...fetchResult,
+					stderr: explainMissingCredentials(
+						fetchResult.stderr,
+						gerritRepo !== undefined &&
+							askpass === null
+					),
+				};
+			}
+			return fetchResult;
+		}
+
+		const checkoutResult = await tryExecAsync(
+			'git checkout FETCH_HEAD',
+			{
+				cwd,
+			}
+		);
+
+		if (!checkoutResult.success) {
+			log(
+				'Failed to checkout change: ' +
+					checkoutResult.stderr
+			);
+			return checkoutResult;
+		}
+
+		log(
+			`Successfully checked out change ${changeNum}` +
+				` patchset ${patchSetNum}`
+		);
+		return {
+			success: true,
+			stdout:
+				fetchResult.stdout + '\n' + checkoutResult.stdout,
+			stderr:
+				fetchResult.stderr + '\n' + checkoutResult.stderr,
+		};
+	} finally {
+		askpass?.dispose();
 	}
+}
 
-	// Checkout FETCH_HEAD (the fetched change)
-	const checkoutResult = await tryExecAsync('git checkout FETCH_HEAD', {
-		cwd,
-	});
+function looksLikeMissingCredentials(stderr: string): boolean {
+	return (
+		/could not read Username/i.test(stderr) ||
+		/terminal prompts disabled/i.test(stderr) ||
+		/Authentication failed/i.test(stderr)
+	);
+}
 
-	if (!checkoutResult.success) {
-		log(`Failed to checkout change: ${checkoutResult.stderr}`);
-		return checkoutResult;
+function explainMissingCredentials(
+	original: string,
+	credsAvailableButHostMismatch: boolean
+): string {
+	if (credsAvailableButHostMismatch) {
+		return (
+			'Git could not authenticate to the remote.\n' +
+			'The configured Gerrit URL does not match' +
+			' the remote URL, so the extension did not' +
+			' inject its stored credentials. Either run' +
+			' "Gerrit: Enter credentials" with a URL' +
+			' matching this remote, or configure git' +
+			' credentials for this host.\n\n' +
+			'Original error:\n' +
+			original
+		);
 	}
-
-	log(`Successfully checked out change ${changeNum} patchset ${patchSetNum}`);
-	return {
-		success: true,
-		stdout: fetchResult.stdout + '\n' + checkoutResult.stdout,
-		stderr: fetchResult.stderr + '\n' + checkoutResult.stderr,
-	};
+	return (
+		'Git could not authenticate to the remote.\n' +
+		'Run "Gerrit: Enter credentials" to store an' +
+		' HTTP password for this Gerrit instance, or' +
+		' configure a git credential helper / SSH key' +
+		' for this host.\n\n' +
+		'Original error:\n' +
+		original
+	);
 }
 
 export async function gitCheckoutRemote(
@@ -436,13 +510,20 @@ export async function gitCheckoutRemote(
 		changeNum,
 		patchSet ?? 'latest',
 		'origin',
-		uri
+		uri,
+		gerritRepo
 	);
 
 	if (!result.success) {
-		void window.showErrorMessage(
-			'Checkout failed. Please see log for more details'
-		);
+		const message =
+			'Checkout failed. ' +
+			(looksLikeMissingCredentials(result.stderr)
+				? 'Run "Gerrit: Enter credentials" to' +
+					' store an HTTP password, or set up' +
+					' git auth for this host. See log' +
+					' for details.'
+				: 'See log for more details.');
+		void window.showErrorMessage(message);
 	}
 	return result.success;
 }
@@ -535,10 +616,22 @@ export async function gitReview(gerritRepo: Repository): Promise<void> {
 			const pushCommand = `git push ${remote} HEAD:refs/for/${targetBranch}`;
 			log(`Pushing for review: ${pushCommand}`);
 
-			const result = await tryExecAsync(pushCommand, {
-				cwd: uri,
-				timeout: 30000,
-			});
+			const askpass = await makeGerritAskpassForRemote(
+				gerritRepo,
+				remote
+			);
+			let result;
+			try {
+				result = await tryExecAsync(pushCommand, {
+					cwd: uri,
+					timeout: 30000,
+					env: askpass
+						? { ...process.env, ...askpass.env }
+						: undefined,
+				});
+			} finally {
+				askpass?.dispose();
+			}
 
 			progress.report({
 				increment: 50,

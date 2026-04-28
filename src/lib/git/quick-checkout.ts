@@ -147,7 +147,8 @@ export async function quickCheckout(
 				changeNum,
 				'latest',
 				'origin',
-				gerritRepo.rootUri.fsPath
+				gerritRepo.rootUri.fsPath,
+				gerritRepo
 			);
 			if (!result.success) {
 				void window.showErrorMessage('Failed to checkout change');
