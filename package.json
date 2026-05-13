@@ -111,6 +111,10 @@
 				"title": "Enter credentials"
 			},
 			{
+				"command": "gerrit.deleteCredentials",
+				"title": "Delete stored credentials"
+			},
+			{
 				"command": "gerrit.fetchMore",
 				"title": "Fetch More"
 			},
@@ -318,6 +322,10 @@
 				"title": "Gerrit: Enter credentials"
 			},
 			{
+				"command": "cmd.gerrit.deleteCredentials",
+				"title": "Gerrit: Delete stored credentials"
+			},
+			{
 				"command": "cmd.gerrit.listenForStreamEvents",
 				"title": "Gerrit: Start listening for Gerrit stream events"
 			},
@@ -476,6 +484,10 @@
 				},
 				{
 					"command": "gerrit.enterCredentials",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.deleteCredentials",
 					"when": "false"
 				},
 				{
@@ -660,6 +672,10 @@
 				},
 				{
 					"command": "cmd.gerrit.enterCredentials",
+					"when": "true"
+				},
+				{
+					"command": "cmd.gerrit.deleteCredentials",
 					"when": "true"
 				},
 				{
