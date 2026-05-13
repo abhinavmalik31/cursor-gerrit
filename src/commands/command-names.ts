@@ -3,6 +3,7 @@ export enum GerritExtensionCommands {
 	CREATE_COMMENT_UNRESOLVED = 'gerrit.createCommentUnresolved',
 	CANCEL_COMMENT = 'gerrit.cancelComment',
 	ENTER_CREDENTIALS = 'gerrit.enterCredentials',
+	DELETE_CREDENTIALS = 'gerrit.deleteCredentials',
 	ACK_COMMENT_THREAD = 'gerrit.ackCommentThread',
 	DONE_COMMENT_THREAD = 'gerrit.doneCommentThread',
 	CHECK_CONNECTION = 'gerrit.checkConnection',

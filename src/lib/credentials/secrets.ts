@@ -80,4 +80,46 @@ export class GerritSecrets {
 			);
 		}
 	}
+
+	private static async _delete<K extends StoredSecretKeys>(
+		key: K
+	): Promise<boolean> {
+		// SecretStorage.delete is idempotent and has no return value.
+		// We read-before-delete so callers can report what was removed.
+		const existed = (await this.secretStorage.get(key)) !== undefined;
+		await this.secretStorage.delete(key);
+		return existed;
+	}
+
+	/**
+	 * Delete the stored secret for the given key, scoped to a URL and/or
+	 * workspace. Returns the count of rows that were actually removed
+	 * (0, 1, or 2) so callers can show meaningful feedback.
+	 */
+	public static async deleteForUrlAndWorkspace<
+		K extends keyof {
+			[K in keyof Secrets]: keyof Secrets[K] extends UrlOrWorkspaceSecret
+				? Secrets[K]
+				: never;
+		},
+	>(
+		key: K,
+		url: string | undefined,
+		workspace: Uri | undefined
+	): Promise<number> {
+		let removed = 0;
+		if (url) {
+			if (await this._delete(`${key}.byUrl.${url}`)) {
+				removed++;
+			}
+		}
+		if (workspace) {
+			if (
+				await this._delete(`${key}.byWorkspace.${workspace.toString()}`)
+			) {
+				removed++;
+			}
+		}
+		return removed;
+	}
 }
