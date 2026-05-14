@@ -29,7 +29,7 @@ export function escapeHtml(text: string): string {
 function renderFileGroup(
 	group: FileGroup,
 	clickable: boolean = true,
-	_showCheckboxes: boolean = false
+	showCheckboxes: boolean = false
 ): string {
 	const commentRows = group.comments
 		.map((c) => {
@@ -55,6 +55,16 @@ function renderFileGroup(
 				: 'comment-row older-patchset';
 			const onclick = clickable ? ' onclick="navigate(this)"' : '';
 
+			const checkbox = showCheckboxes
+				? `<input type="checkbox"
+		class="comment-check"
+		data-file="${escapeHtml(c.filePath)}"
+		data-line="${c.line ?? ''}"
+		data-message="${escapeHtml(c.message)}"
+		data-comment-id="${escapeHtml(c.commentId ?? '')}"
+		onclick="event.stopPropagation()">`
+				: '';
+
 			return `
 <div class="${rowClass}"
 	data-file="${escapeHtml(c.filePath)}"
@@ -62,6 +72,7 @@ function renderFileGroup(
 	data-patchset="${c.patchSet ?? ''}"
 	${onclick}>
 	<div class="comment-header">
+		${checkbox}
 		<span class="location">
 			Line ${c.line ?? 'file-level'}
 		</span>
@@ -152,7 +163,7 @@ export function buildHTML(
       Accept Selected Suggestions
     </button>
   </div>
-  ${unresolvedGroups.map((g) => renderFileGroup(g, true)).join('')}
+  ${unresolvedGroups.map((g) => renderFileGroup(g, true, true)).join('')}
 </div>`
 			: '';
 
