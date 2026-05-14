@@ -20,8 +20,8 @@ import {
 	CommentMap,
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
-import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { GerritRevisionFileStatus } from '../../lib/gerrit/gerritAPI/types';
+import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
 import { CommentManager } from '../../providers/commentProvider';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
@@ -388,6 +388,7 @@ function groupComments(
 					unresolved: threadUnresolved,
 					codeSnippet: extractSnippet(lines, c.line),
 					patchSet: c.patchSet,
+					commentId: c.id,
 				};
 
 				if (c.isDraft) {
@@ -442,7 +443,8 @@ function groupComments(
 function resolveCurrentRevisionPath(
 	commentPath: string,
 	files: Record<string, GerritFile> | null | undefined
-): { kind: 'present' | 'unknown'; path: string }
+):
+	| { kind: 'present' | 'unknown'; path: string }
 	| { kind: 'renamed'; path: string; oldPath: string }
 	| { kind: 'deleted'; path: string } {
 	if (!files) {
