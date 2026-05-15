@@ -25,6 +25,7 @@ import { quickCheckout } from '../git/quick-checkout';
 import { getConfiguration } from '../vscode/config';
 import { writePromptFile } from './promptBuilder';
 import { getDefaultModel } from './modelSelector';
+import { getAiAgentTimeoutMs } from './timeoutSelector';
 import { getAPI } from '../gerrit/gerritAPI';
 import { AgentCommand } from './agentCli';
 import { spawn } from 'child_process';
@@ -295,7 +296,8 @@ async function invokeCursorAgent(
 
 	log(`Invoking ${agent.cmd} agent (stream-json)`);
 
-	const TIMEOUT_MS = 5 * 60 * 1000;
+	const TIMEOUT_MS = getAiAgentTimeoutMs();
+	const timeoutMinutes = Math.round(TIMEOUT_MS / 60 / 1000);
 	const startTime = Date.now();
 
 	return new Promise<void>((resolve, reject) => {
@@ -331,14 +333,19 @@ async function invokeCursorAgent(
 		}
 
 		const timer = setTimeout(() => {
-			log('Agent timed out after 5 minutes');
+			const msg = `Agent timed out after ${timeoutMinutes} minute(s)`;
+			log(msg);
 			if (oc) {
 				oc.appendLine('');
 				oc.appendLine(SEPARATOR);
-				oc.appendLine('[Timed out after 5 minutes]');
+				oc.appendLine(`[${msg}]`);
+				oc.appendLine(
+					'Tip: increase the timeout via ' +
+						'"Gerrit: Set AI Agent Timeout"'
+				);
 			}
 			proc.kill();
-			settle(reject, new Error('Timed out after 5 minutes'));
+			settle(reject, new Error(msg));
 		}, TIMEOUT_MS);
 
 		let lastStatus = '';

@@ -76,6 +76,7 @@ import { focusChange } from '../lib/commandHandlers/focusChange';
 import { enableAiReview } from '../lib/ai-review/enableAiReview';
 import { acceptSuggestion } from '../lib/ai-review/commentFixer';
 import { selectAiModel } from '../lib/ai-review/modelSelector';
+import { setAiAgentTimeout } from '../lib/ai-review/timeoutSelector';
 import { Repository } from '../types/vscode-extension-git';
 import { checkConnection } from '../lib/gerrit/gerritAPI';
 import { GerritExtensionCommands } from './command-names';
@@ -603,6 +604,11 @@ export function registerCommands(
 	context.subscriptions.push(
 		registerCommand(GerritExtensionCommands.SELECT_AI_MODEL, () =>
 			selectAiModel()
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(GerritExtensionCommands.SET_AI_TIMEOUT, () =>
+			setAiAgentTimeout()
 		)
 	);
 	context.subscriptions.push(
