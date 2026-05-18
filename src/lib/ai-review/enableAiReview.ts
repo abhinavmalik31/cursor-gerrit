@@ -1,9 +1,15 @@
 import {
 	AgentCommand,
 	buildMcpEnableCommand,
-	buildLoginCommand,
 } from './agentCli';
-import { window, workspace, ExtensionContext, ProgressLocation } from 'vscode';
+import {
+	window,
+	workspace,
+	ExtensionContext,
+	ProgressLocation,
+	env,
+	Uri,
+} from 'vscode';
 import { getGerritURLFromReviewFile } from '../credentials/enterCredentials';
 import { UserCancelledError, isUserCancelledError } from '../util/errors';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
@@ -144,6 +150,7 @@ async function resolvePrerequisites(): Promise<PrerequisiteResult> {
 }
 
 const STATUS_TIMEOUT_MS = 5_000;
+const LOGIN_URL_PATTERN = /https:\/\/cursor\.com\/loginDeepControl\?\S+/;
 
 async function isAgentLoggedIn(agent: AgentCommand): Promise<boolean> {
 	const args = [...agent.baseArgs, 'status'];
@@ -207,15 +214,95 @@ async function promptAgentLogin(agent: AgentCommand): Promise<boolean> {
 		'Cancel'
 	);
 
-	if (pick === 'Login') {
-		const term = window.createTerminal('Cursor Agent Login');
-		term.show();
-		term.sendText(buildLoginCommand(agent));
-		await window.showInformationMessage('Logging in via terminal', 'Click here to continue');
-		return true;
+	if (pick !== 'Login') {
+		return false;
 	}
 
-	return false;
+	const loginOk = await window.withProgress(
+		{
+			location: ProgressLocation.Notification,
+			title: 'Cursor Agent Login',
+			cancellable: false,
+		},
+		async (progress) => {
+			progress.report({
+				message: 'Waiting for browser authentication...',
+			});
+			return runAgentLogin(agent);
+		}
+	);
+	if (!loginOk) {
+		void window.showWarningMessage(
+			'Cursor Agent login failed. Please try again.'
+		);
+		return false;
+	}
+
+	const loggedIn = await isAgentLoggedIn(agent);
+	if (!loggedIn) {
+		void window.showWarningMessage(
+			'Cursor Agent login completed, but login status ' +
+				'could not be verified. Please try again.'
+		);
+	}
+
+	return loggedIn;
+}
+
+async function runAgentLogin(agent: AgentCommand): Promise<boolean> {
+	const args = [...agent.baseArgs, 'login'];
+	return new Promise<boolean>((resolve, reject) => {
+		let settled = false;
+		let loginUrlShown = false;
+		let output = '';
+		const proc = spawn(agent.cmd, args, {
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+
+		const finish = (result: boolean): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			resolve(result);
+		};
+
+		const handleOutput = (chunk: Buffer): void => {
+			output += chunk.toString();
+			const match = LOGIN_URL_PATTERN.exec(output);
+			if (!match || loginUrlShown) {
+				output = output.slice(-2_000);
+				return;
+			}
+
+			loginUrlShown = true;
+			const loginUrl = match[0];
+			void window
+				.showInformationMessage(
+					'Cursor Agent login requires browser authentication.',
+					'Open Login Link'
+				)
+				.then((pick) => {
+					if (pick === 'Open Login Link') {
+						void env.openExternal(Uri.parse(loginUrl));
+					}
+				});
+		};
+
+		proc.stdout.on('data', handleOutput);
+		proc.stderr.on('data', handleOutput);
+
+		proc.on('error', (err) => {
+			if (!settled) {
+				settled = true;
+				reject(err);
+			}
+		});
+
+		proc.on('close', (code) => {
+			finish(code === 0);
+		});
+	});
 }
 
 async function pickCheckoutBehavior(): Promise<CheckoutBehavior | undefined> {
