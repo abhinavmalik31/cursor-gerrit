@@ -302,6 +302,10 @@ export const commands: {
 		title: 'Select AI Review Model',
 		inCommandPalette: true,
 	},
+	'gerrit.setAiAgentTimeout': {
+		title: 'Set AI Agent Timeout (Review & Accept Suggestion)',
+		inCommandPalette: true,
+	},
 	'gerrit.commentsOverview': {
 		title: 'Comments Overview',
 		icon: '$(comment-discussion)',
@@ -1217,6 +1221,17 @@ export const config = {
 			description:
 				'Path to a custom Markdown file with additional review guidelines (relative to workspace root)',
 			default: '.gerrit-ai-prompt.md',
+		},
+	},
+	'gerrit.aiReview.timeoutMinutes': {
+		jsonDefinition: {
+			type: 'number',
+			title: 'AI Agent Timeout (minutes)',
+			description:
+				'Maximum time to wait for the AI agent before aborting. Applies to both AI Review and Accept Suggestion. Increase this for slower/heavier models (e.g. Claude 4.7 Opus High). Range: 1-120 minutes.',
+			default: 5,
+			minimum: 1,
+			maximum: 120,
 		},
 	},
 } as const;

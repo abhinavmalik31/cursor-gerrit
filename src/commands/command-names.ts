@@ -54,6 +54,7 @@ export enum GerritExtensionCommands {
 	AI_REVIEW = 'gerrit.aiReview',
 	ENABLE_AI_REVIEW = 'gerrit.enableAiReview',
 	SELECT_AI_MODEL = 'gerrit.selectAiModel',
+	SET_AI_TIMEOUT = 'gerrit.setAiAgentTimeout',
 	COMMENTS_OVERVIEW = 'gerrit.commentsOverview',
 	ACCEPT_SUGGESTION = 'gerrit.acceptSuggestion',
 }
