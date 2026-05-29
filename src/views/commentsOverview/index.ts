@@ -513,10 +513,11 @@ async function navigateToComment(
 			activePatchSetNumber > 0 &&
 			patchSet !== activePatchSetNumber;
 
-		// For older-patchset comments, follow
-		// renames and skip deletes so the user
-		// always lands on something useful.
+		// For older-patchset comments, resolve the file path
+		// against the current revision (handles renames/deletes).
+		// targetPath may differ from filePath when a rename occurred.
 		let targetPath = filePath;
+		let lineToJump = line;
 		if (isOlderPatchset) {
 			const resolved = resolveCurrentRevisionPath(
 				filePath,
@@ -524,25 +525,16 @@ async function navigateToComment(
 			);
 			if (resolved.kind === 'deleted') {
 				void window.showWarningMessage(
-					`File "${filePath}" was deleted` +
-						` after patchset ${patchSet}` +
-						` (current: ${activePatchSetNumber}).` +
-						' No diff to open.'
+					`Cannot navigate to comment: file "${filePath}" was deleted in a later patchset.`
 				);
 				return;
 			}
 			if (resolved.kind === 'renamed') {
-				void window.showInformationMessage(
-					`File "${filePath}" was renamed to` +
-						` "${resolved.path}" after` +
-						` patchset ${patchSet}.` +
-						' Opening the new path.'
-				);
 				targetPath = resolved.path;
 			}
-			// 'present' and 'unknown' both fall
-			// through with targetPath unchanged
-			// (or set to the renamed new path).
+			// Line numbers from older patchsets may not match the
+			// current revision, so open at the top of the file.
+			lineToJump = undefined;
 		}
 
 		const revDesc = {
@@ -583,15 +575,12 @@ async function navigateToComment(
 			...(diffCmd.arguments as unknown[])
 		);
 
-		// Immediately navigate to the line so the
-		// user sees the right location while
-		// comments load in the background.
-		if (line) {
+		if (lineToJump) {
 			await vscodeCommands.executeCommand(
 				'workbench.action.focusActiveEditorGroup'
 			);
 			await vscodeCommands.executeCommand('revealLine', {
-				lineNumber: line - 1,
+				lineNumber: lineToJump - 1,
 				at: 'center',
 			});
 		}
@@ -622,7 +611,7 @@ async function navigateToComment(
 			await loadedMgr.loadComments();
 		}
 
-		if (line) {
+		if (lineToJump) {
 			const expandAtLine = (
 				mgr:
 					| import('../../providers/commentProvider').DocumentCommentManager
@@ -632,7 +621,7 @@ async function navigateToComment(
 					return;
 				}
 				for (const t of mgr.createdThreads) {
-					if (t.range.start.line === line - 1) {
+					if (t.range.start.line === lineToJump! - 1) {
 						t.collapsibleState =
 							CommentThreadCollapsibleState.Expanded;
 					}

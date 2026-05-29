@@ -123,12 +123,6 @@ export function buildHTML(
 		<span class="codicon codicon-history"></span>
 		Older Patchset Comments (${olderCount})
 	</h2>
-	<div class="older-patchset-note">
-		These comments are from an older patchset.
-		Clicking opens the file in the current
-		revision; if it was renamed or deleted
-		you'll see a notice.
-	</div>
 	${olderPatchsetGroups.map((g) => renderFileGroup(g, true)).join('')}
 </div>`
 			: '';
