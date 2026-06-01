@@ -26,12 +26,15 @@ import {
 } from '../lib/gerrit/gerritAPI/types';
 import { FileTreeView } from '../views/activityBar/changes/changeTreeView/fileTreeView';
 import { GerritCommentThread } from '../lib/gerrit/gerritAPI/gerritCommentThread';
+import { AiReviewerComment } from '../lib/ai-review/aiReviewerComment';
 import { FileMetaWithSideAndBase, FileProvider } from './fileProvider';
 import { GerritChange } from '../lib/gerrit/gerritAPI/gerritChange';
+import { AiThreadManager } from '../lib/ai-review/aiThreadManager';
 import { DateSortDirection, DateTime } from '../lib/util/dateTime';
 import { GerritFile } from '../lib/gerrit/gerritAPI/gerritFile';
 import { getCurrentChangeIDCached } from '../lib/git/commit';
 import { GerritAPIWith } from '../lib/gerrit/gerritAPI/api';
+import { AI_COMMENT_CONTEXT } from '../lib/util/magic';
 import { CacheContainer } from '../lib/util/cache';
 import { getAPI } from '../lib/gerrit/gerritAPI';
 import { uniqueComplex } from '../lib/util/util';
@@ -877,4 +880,156 @@ export async function openCommentOnline(thread: CommentThread): Promise<void> {
 	}
 
 	await env.openExternal(Uri.parse(url));
+}
+
+/**
+ * Send the user's reply-box text (or an empty seed) to the inline
+ * AI Reviewer for this comment thread. The AI response streams
+ * into the same thread as a synthetic comment. Re-invoking on the
+ * same thread continues the conversation.
+ */
+export async function askAiInThread(
+	reply: NewlyCreatedGerritCommentReply | GerritCommentBase,
+	gerritRepo: Repository
+): Promise<void> {
+	let gthread: GerritCommentThread | null;
+	let userText: string;
+	if ('id' in reply) {
+		gthread = reply.thread;
+		userText = '';
+	} else {
+		gthread = GerritCommentThread.from(reply.thread);
+		userText = reply.text ?? '';
+	}
+	if (!gthread) {
+		void window.showErrorMessage(
+			'Could not resolve Gerrit thread for AI chat.'
+		);
+		return;
+	}
+	await AiThreadManager.instance.ask(gthread, userText, gerritRepo);
+}
+
+/** Cancel the in-flight AI run for this thread, if any. */
+export async function cancelAiInThread(thread: CommentThread): Promise<void> {
+	const gthread = GerritCommentThread.from(thread);
+	if (!gthread) {
+		return;
+	}
+	await AiThreadManager.instance.cancel(gthread);
+}
+
+/**
+ * End the AI chat session attached to this thread and free its
+ * agent / MCP resources. The synthetic AI Reviewer comments stay
+ * in the bubble for reference until the thread is collapsed.
+ */
+export async function endAiInThread(thread: CommentThread): Promise<void> {
+	const gthread = GerritCommentThread.from(thread);
+	if (!gthread) {
+		return;
+	}
+	await AiThreadManager.instance.endSession(gthread);
+}
+
+/**
+ * Promote an AI Reviewer comment's body into a real Gerrit draft
+ * comment on the same thread. The draft is attached as a reply to
+ * the last real Gerrit comment in the thread, then the synthetic
+ * AI bubble is removed (so the bubble doesn't get duplicated by
+ * the user's now-published version).
+ */
+export async function postAiAsDraft(
+	comment: AiReviewerComment,
+	isResolved: boolean
+): Promise<void> {
+	if (!comment || comment.isStreaming) {
+		void window.showWarningMessage(
+			'Wait for the AI to finish before posting.'
+		);
+		return;
+	}
+	const text = comment.rawText.trim();
+	if (!text) {
+		void window.showWarningMessage(
+			'AI response is empty; nothing to post.'
+		);
+		return;
+	}
+	const gthread = comment.thread;
+	if (!gthread) {
+		void window.showErrorMessage('AI bubble is detached from its thread.');
+		return;
+	}
+
+	const lastReal = lastRealGerritComment(gthread);
+	// Pull the AI bubble out first so a refresh triggered by the
+	// new draft doesn't leave the published comment and the
+	// synthetic bubble side-by-side for a beat.
+	removeAiCommentFromThread(gthread, comment);
+	const draft = await createComment(gthread, text, isResolved, lastReal);
+	if (!draft) {
+		void window.showErrorMessage('Failed to post AI response as draft.');
+	}
+}
+
+/**
+ * Remove every AI Reviewer bubble from a thread so the user can
+ * de-clutter a long conversation. The underlying chat session is
+ * left intact — call End AI Chat to actually free it.
+ */
+export function clearAiInThread(thread: CommentThread): void {
+	const gthread = GerritCommentThread.from(thread);
+	if (!gthread) {
+		return;
+	}
+	const raw = gthread.thread as unknown as CommentThread;
+	const filtered = (raw.comments as readonly unknown[]).filter(
+		(c) => !isAiCommentLike(c)
+	);
+	if (filtered.length === raw.comments.length) {
+		return;
+	}
+	raw.comments = filtered as CommentThread['comments'];
+}
+
+/**
+ * Delete a single AI Reviewer bubble from its thread. Used by the
+ * per-comment trash action so the user can prune individual turns
+ * without clearing the whole conversation.
+ */
+export function deleteAiComment(comment: AiReviewerComment): void {
+	const gthread = comment?.thread;
+	if (!gthread) {
+		return;
+	}
+	removeAiCommentFromThread(gthread, comment);
+}
+
+function lastRealGerritComment(
+	gthread: GerritCommentThread
+): GerritCommentBase | undefined {
+	const all = gthread.comments as readonly unknown[];
+	for (let i = all.length - 1; i >= 0; i--) {
+		if (!isAiCommentLike(all[i])) {
+			return all[i] as GerritCommentBase;
+		}
+	}
+	return undefined;
+}
+
+function isAiCommentLike(c: unknown): boolean {
+	const ctx = (c as { contextValue?: string } | null)?.contextValue;
+	return typeof ctx === 'string' && ctx.includes(AI_COMMENT_CONTEXT);
+}
+
+function removeAiCommentFromThread(
+	gthread: GerritCommentThread,
+	target: AiReviewerComment
+): void {
+	const raw = gthread.thread as unknown as CommentThread;
+	const filtered = (raw.comments as readonly unknown[]).filter(
+		(c) => c !== target
+	);
+	raw.comments = filtered as CommentThread['comments'];
 }

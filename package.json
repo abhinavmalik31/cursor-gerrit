@@ -296,6 +296,42 @@
 				"icon": "$(lightbulb)"
 			},
 			{
+				"command": "gerrit.askAiInThread",
+				"title": "Ask AI",
+				"icon": "$(hubot)",
+				"enablement": "true"
+			},
+			{
+				"command": "gerrit.cancelAiInThread",
+				"title": "Cancel AI",
+				"icon": "$(stop-circle)"
+			},
+			{
+				"command": "gerrit.endAiInThread",
+				"title": "End AI Chat",
+				"icon": "$(close)"
+			},
+			{
+				"command": "gerrit.clearAiInThread",
+				"title": "Clear AI Output",
+				"icon": "$(clear-all)"
+			},
+			{
+				"command": "gerrit.postAiAsDraftResolved",
+				"title": "Post AI as draft (resolved)",
+				"icon": "$(comment-discussion)"
+			},
+			{
+				"command": "gerrit.postAiAsDraftUnresolved",
+				"title": "Post AI as draft (unresolved)",
+				"icon": "$(comment-unresolved)"
+			},
+			{
+				"command": "gerrit.deleteAiComment",
+				"title": "Delete AI message",
+				"icon": "$(trash)"
+			},
+			{
 				"command": "cmd.gerrit.changeGitRepo",
 				"title": "Gerrit: Change git repo"
 			},
@@ -643,6 +679,34 @@
 					"when": "false"
 				},
 				{
+					"command": "gerrit.askAiInThread",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.cancelAiInThread",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.endAiInThread",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.clearAiInThread",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.postAiAsDraftResolved",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.postAiAsDraftUnresolved",
+					"when": "false"
+				},
+				{
+					"command": "gerrit.deleteAiComment",
+					"when": "false"
+				},
+				{
 					"command": "cmd.gerrit.changeGitRepo",
 					"when": "true"
 				},
@@ -733,46 +797,56 @@
 			],
 			"comments/comment/context": [
 				{
-					"command": "gerrit.createCommentUnresolved",
+					"command": "gerrit.askAiInThread",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@1"
 				},
 				{
-					"command": "gerrit.createCommentResolved",
+					"command": "gerrit.createCommentUnresolved",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@2"
 				},
 				{
-					"command": "gerrit.cancelComment",
+					"command": "gerrit.createCommentResolved",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@3"
+				},
+				{
+					"command": "gerrit.cancelComment",
+					"when": "commentController == gerrit",
+					"group": "newCommentButtons@4"
 				}
 			],
 			"comments/commentThread/context": [
 				{
-					"command": "gerrit.createCommentUnresolved",
+					"command": "gerrit.askAiInThread",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@1"
 				},
 				{
-					"command": "gerrit.createCommentResolved",
+					"command": "gerrit.createCommentUnresolved",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@2"
 				},
 				{
-					"command": "gerrit.cancelComment",
+					"command": "gerrit.createCommentResolved",
 					"when": "commentController == gerrit",
 					"group": "newCommentButtons@3"
 				},
 				{
+					"command": "gerrit.cancelComment",
+					"when": "commentController == gerrit",
+					"group": "newCommentButtons@4"
+				},
+				{
 					"command": "gerrit.toggleResolvedOn",
 					"when": "commentController == gerrit && commentIsEmpty && commentThread =~ /yesLastCommentDraft/ && commentThread =~ /noResolved/",
-					"group": "newCommentButtons@4"
+					"group": "newCommentButtons@5"
 				},
 				{
 					"command": "gerrit.toggleResolvedOff",
 					"when": "commentController == gerrit && commentIsEmpty && commentThread =~ /yesLastCommentDraft/ && commentThread =~ /yesResolved/",
-					"group": "newCommentButtons@5"
+					"group": "newCommentButtons@6"
 				}
 			],
 			"comments/commentThread/title": [
@@ -787,14 +861,29 @@
 					"group": "collapse@2"
 				},
 				{
+					"command": "gerrit.cancelAiInThread",
+					"when": "commentController == gerrit",
+					"group": "collapse@3"
+				},
+				{
+					"command": "gerrit.clearAiInThread",
+					"when": "commentController == gerrit",
+					"group": "collapse@4"
+				},
+				{
+					"command": "gerrit.endAiInThread",
+					"when": "commentController == gerrit",
+					"group": "collapse@5"
+				},
+				{
 					"command": "gerrit.copyCommentLink",
 					"when": "commentController == gerrit && gerrit:hasCommentFeature",
-					"group": "collapse@3"
+					"group": "collapse@6"
 				},
 				{
 					"command": "gerrit.openCommentOnline",
 					"when": "commentController == gerrit && gerrit:hasCommentFeature",
-					"group": "collapse@4"
+					"group": "collapse@7"
 				}
 			],
 			"comments/comment/title": [
@@ -822,6 +911,21 @@
 					"command": "gerrit.acceptSuggestion",
 					"when": "commentController == gerrit && comment =~ /quickActionable/",
 					"group": "inline@5"
+				},
+				{
+					"command": "gerrit.postAiAsDraftUnresolved",
+					"when": "commentController == gerrit && comment =~ /gerritAiReviewerComment/",
+					"group": "inline@6"
+				},
+				{
+					"command": "gerrit.postAiAsDraftResolved",
+					"when": "commentController == gerrit && comment =~ /gerritAiReviewerComment/",
+					"group": "inline@7"
+				},
+				{
+					"command": "gerrit.deleteAiComment",
+					"when": "commentController == gerrit && comment =~ /gerritAiReviewerComment/",
+					"group": "inline@8"
 				}
 			],
 			"view/item/context": [
@@ -1531,6 +1635,12 @@
 					"title": "Custom AI Review Prompt File",
 					"description": "Path to a custom Markdown file with additional review guidelines (relative to workspace root)",
 					"default": ".gerrit-ai-prompt.md"
+				},
+				"gerrit.aiReview.apiKey": {
+					"type": "string",
+					"title": "Cursor API Key (for inline AI chat)",
+					"description": "API key used by the inline \"Ask AI\" comment-thread chat. Leave empty to fall back to the CURSOR_API_KEY environment variable. Mint a key at https://cursor.com/dashboard/integrations.",
+					"default": ""
 				}
 			}
 		}
@@ -1556,8 +1666,8 @@
 		"build:review:codicons:css": "npm run copy -- node_modules/@vscode/codicons/dist/codicon.css out/review/codicon.css",
 		"build:review:codicons:ttf": "npm run copy -- node_modules/@vscode/codicons/dist/codicon.ttf out/review/codicon.ttf",
 		"build:review:css": "npm run copy -- src/views/activityBar/review/css/index.css out/review/index.css",
-		"build:main": "esbuild --minify --bundle --outfile=out/extension.js src/extension.ts --platform=node --external:vscode",
-		"build:debug:main": "esbuild --bundle --outfile=out/extension.js src/extension.ts --platform=node --external:vscode --define:process.env.DEV_OVERRIDE=true",
+		"build:main": "esbuild --minify --bundle --outfile=out/extension.js src/extension.ts --platform=node --external:vscode --external:@cursor/sdk --external:sqlite3",
+		"build:debug:main": "esbuild --bundle --outfile=out/extension.js src/extension.ts --platform=node --external:vscode --external:@cursor/sdk --external:sqlite3 --define:process.env.DEV_OVERRIDE=true",
 		"build:mcp": "esbuild --bundle --outfile=out/lib/mcp/gerritMcpServer.js src/lib/mcp/gerritMcpServer.ts --platform=node --external:vscode",
 		"build:debug:mcp": "esbuild --bundle --outfile=out/lib/mcp/gerritMcpServer.js src/lib/mcp/gerritMcpServer.ts --platform=node --external:vscode",
 		"build": "rimraf ./out && npm run build:main && npm run build:mcp && npm run build:review:js && npm run build:review:css && npm run build:review:codicons:css && npm run build:review:codicons:ttf",
@@ -1612,6 +1722,7 @@
 		"vscode-generate-package-json": "1.2.2"
 	},
 	"dependencies": {
+		"@cursor/sdk": "^1.0.15",
 		"gitdiff-parser": "^0.2.2",
 		"got": "^11.8.5"
 	}

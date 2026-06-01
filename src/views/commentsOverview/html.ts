@@ -28,8 +28,8 @@ export function escapeHtml(text: string): string {
 
 function renderFileGroup(
 	group: FileGroup,
-	clickable: boolean = true,
-	_showCheckboxes: boolean = false
+	isOlderPatchset: boolean = false,
+	showCheckboxes: boolean = false
 ): string {
 	const commentRows = group.comments
 		.map((c) => {
@@ -39,7 +39,7 @@ function renderFileGroup(
 					? '<span class="badge unresolved">' + 'Unresolved</span>'
 					: '';
 			const psBadge =
-				!clickable && typeof c.patchSet === 'number'
+				isOlderPatchset && typeof c.patchSet === 'number'
 					? '<span class="badge older-ps">' +
 						`PS ${c.patchSet}</span>`
 					: '';
@@ -50,18 +50,33 @@ function renderFileGroup(
 				? `<pre class="code-snippet">${escapeHtml(c.codeSnippet)}</pre>`
 				: '';
 
-			const rowClass = clickable
-				? 'comment-row'
-				: 'comment-row older-patchset';
-			const onclick = clickable ? ' onclick="navigate(this)"' : '';
+			// Older-patchset rows keep the
+			// `older-patchset` class for visual
+			// distinction but are now clickable
+			// too -- navigation follows renames
+			// and warns on deletes.
+			const rowClass = isOlderPatchset
+				? 'comment-row older-patchset'
+				: 'comment-row';
+
+			const checkbox = showCheckboxes
+				? `<input type="checkbox"
+		class="comment-check"
+		data-file="${escapeHtml(c.filePath)}"
+		data-line="${c.line ?? ''}"
+		data-message="${escapeHtml(c.message)}"
+		data-comment-id="${escapeHtml(c.commentId ?? '')}"
+		onclick="event.stopPropagation()">`
+				: '';
 
 			return `
 <div class="${rowClass}"
 	data-file="${escapeHtml(c.filePath)}"
 	data-line="${c.line ?? ''}"
 	data-patchset="${c.patchSet ?? ''}"
-	${onclick}>
+	onclick="navigate(this)">
 	<div class="comment-header">
+		${checkbox}
 		<span class="location">
 			Line ${c.line ?? 'file-level'}
 		</span>
@@ -115,15 +130,22 @@ export function buildHTML(
 		olderPatchsetGroups.length > 0
 			? `
 <div class="section older-patchset-section">
-	<h2>
-		<span class="codicon codicon-history"></span>
-		Older Patchset Comments (${olderCount})
-	</h2>
-	<div class="older-patchset-note">
-		These comments are from an older patchset
-		and cannot be navigated to.
-	</div>
-	${olderPatchsetGroups.map((g) => renderFileGroup(g, false)).join('')}
+  <div class="section-header-row">
+    <h2>
+      <span class="codicon codicon-history"></span>
+      Older Patchset Comments (${olderCount})
+    </h2>
+    <button class="accept-btn" onclick="acceptSelected()">
+      Accept Selected Suggestions
+    </button>
+  </div>
+  <div class="older-patchset-note">
+    These comments are from an older patchset.
+    Clicking opens the file in the current
+    revision; if it was renamed or deleted
+    you'll see a notice.
+  </div>
+  ${olderPatchsetGroups.map((g) => renderFileGroup(g, true, true)).join('')}
 </div>`
 			: '';
 
@@ -135,7 +157,7 @@ export function buildHTML(
 		<span class="codicon codicon-edit"></span>
 		Draft Comments (${draftCount})
 	</h2>
-	${draftGroups.map((g) => renderFileGroup(g)).join('')}
+	${draftGroups.map((g) => renderFileGroup(g, false)).join('')}
 </div>`
 			: '';
 
@@ -152,7 +174,7 @@ export function buildHTML(
       Accept Selected Suggestions
     </button>
   </div>
-  ${unresolvedGroups.map((g) => renderFileGroup(g, true)).join('')}
+  ${unresolvedGroups.map((g) => renderFileGroup(g, false, true)).join('')}
 </div>`
 			: '';
 

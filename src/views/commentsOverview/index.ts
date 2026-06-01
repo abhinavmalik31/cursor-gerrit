@@ -20,6 +20,7 @@ import {
 	CommentMap,
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
+import { GerritRevisionFileStatus } from '../../lib/gerrit/gerritAPI/types';
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
 import { CommentManager } from '../../providers/commentProvider';
@@ -387,6 +388,7 @@ function groupComments(
 					unresolved: threadUnresolved,
 					codeSnippet: extractSnippet(lines, c.line),
 					patchSet: c.patchSet,
+					commentId: c.id,
 				};
 
 				if (c.isDraft) {
@@ -422,6 +424,69 @@ function groupComments(
 	};
 }
 
+/**
+ * Decide which path in the current revision a
+ * comment's file maps to, when the comment was
+ * left on an older patchset and the file may
+ * have been renamed or deleted since.
+ *
+ * - 'present': same path exists in current rev,
+ *   open it as today.
+ * - 'renamed': another file in the current rev
+ *   has oldPath === commentPath, open the new
+ *   path with an info toast.
+ * - 'deleted': file is marked DELETED in current
+ *   rev, warn and skip.
+ * - 'unknown': not present and no rename target
+ *   found, fall back to existing best-effort.
+ */
+function resolveCurrentRevisionPath(
+	commentPath: string,
+	files: Record<string, GerritFile> | null | undefined
+):
+	| { kind: 'present' | 'unknown'; path: string }
+	| { kind: 'renamed'; path: string; oldPath: string }
+	| { kind: 'deleted'; path: string } {
+	if (!files) {
+		return {
+			kind: 'unknown',
+			path: commentPath,
+		};
+	}
+
+	const direct = files[commentPath];
+	if (direct) {
+		if (direct.status === GerritRevisionFileStatus.DELETED) {
+			return {
+				kind: 'deleted',
+				path: commentPath,
+			};
+		}
+		return {
+			kind: 'present',
+			path: commentPath,
+		};
+	}
+
+	for (const f of Object.values(files)) {
+		if (
+			f.status === GerritRevisionFileStatus.RENAMED &&
+			f.oldPath === commentPath
+		) {
+			return {
+				kind: 'renamed',
+				path: f.filePath,
+				oldPath: commentPath,
+			};
+		}
+	}
+
+	return {
+		kind: 'unknown',
+		path: commentPath,
+	};
+}
+
 async function navigateToComment(
 	filePath: string,
 	line: number | undefined,
@@ -429,22 +494,6 @@ async function navigateToComment(
 	gerritRepo: Repository
 ): Promise<void> {
 	if (filePath === '/PATCHSET_LEVEL') {
-		return;
-	}
-
-	// Block navigation for comments from a
-	// different patchset.
-	if (
-		typeof patchSet === 'number' &&
-		activePatchSetNumber > 0 &&
-		patchSet !== activePatchSetNumber
-	) {
-		void window.showInformationMessage(
-			`This comment is from patchset ${patchSet}` +
-				` (current: ${activePatchSetNumber}).` +
-				' Navigation is only available for' +
-				' current patchset comments.'
-		);
 		return;
 	}
 
@@ -461,20 +510,63 @@ async function navigateToComment(
 			return;
 		}
 
+		const isOlderPatchset =
+			typeof patchSet === 'number' &&
+			activePatchSetNumber > 0 &&
+			patchSet !== activePatchSetNumber;
+
+		// For older-patchset comments, follow
+		// renames and skip deletes so the user
+		// always lands on something useful.
+		let targetPath = filePath;
+		if (isOlderPatchset) {
+			const resolved = resolveCurrentRevisionPath(
+				filePath,
+				currentRevision._files
+			);
+			if (resolved.kind === 'deleted') {
+				void window.showWarningMessage(
+					`File "${filePath}" was deleted` +
+						` after patchset ${patchSet}` +
+						` (current: ${activePatchSetNumber}).` +
+						' No diff to open.'
+				);
+				return;
+			}
+			if (resolved.kind === 'renamed') {
+				void window.showInformationMessage(
+					`File "${filePath}" was renamed to` +
+						` "${resolved.path}" after` +
+						` patchset ${patchSet}.` +
+						' Opening the new path.'
+				);
+				targetPath = resolved.path;
+			}
+			// 'present' and 'unknown' both fall
+			// through with targetPath unchanged
+			// (or set to the renamed new path).
+		}
+
 		const revDesc = {
 			id: currentRevision.revisionID,
 			number: currentRevision.number,
 		};
 
 		const file =
-			currentRevision._files?.[filePath] ??
-			new GerritFile(change.changeID, change.project, revDesc, filePath, {
-				lines_inserted: 0,
-				lines_deleted: 0,
-				size_delta: 0,
-				size: 0,
-				old_path: undefined,
-			});
+			currentRevision._files?.[targetPath] ??
+			new GerritFile(
+				change.changeID,
+				change.project,
+				revDesc,
+				targetPath,
+				{
+					lines_inserted: 0,
+					lines_deleted: 0,
+					size_delta: 0,
+					size: 0,
+					old_path: undefined,
+				}
+			);
 
 		const diffCmd = await FileTreeView.createDiffCommand(
 			gerritRepo,
