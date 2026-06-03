@@ -9,6 +9,7 @@ import {
 	Range,
 	Position,
 	Selection,
+	TextEditor,
 	TextEditorRevealType,
 	Disposable,
 } from 'vscode';
@@ -48,15 +49,31 @@ let navigationInProgress = false;
 // the diff opens: poll at this interval for this many attempts.
 const MANAGER_POLL_INTERVAL_MS = 50;
 const MANAGER_POLL_ATTEMPTS = 30;
-// Keep correcting the scroll position for this long after the thread
-// widget expands, capped at this many individual corrections.
-const SCROLL_CORRECTOR_TTL_MS = 4000;
-const MAX_SCROLL_CORRECTIONS = 30;
+// After expanding the thread, wait for the editor's visible range to go
+// quiet for this long (no scroll events) before centering once. Capped
+// so an editor that never settles still gets centered.
+const VIEW_SETTLE_QUIET_MS = 120;
+const VIEW_SETTLE_MAX_MS = 1500;
 
-// A single active scroll corrector, replaced on every navigation so two
-// navigations within SCROLL_CORRECTOR_TTL_MS can't fight over scroll.
-let activeScrollCorrector: Disposable | null = null;
-let scrollCorrectorTimeout: ReturnType<typeof setTimeout> | null = null;
+// State for the single pending "reveal after settle" pass, replaced on
+// every navigation so two navigations can't fight over the scroll
+// position of the same pane.
+let activeRevealWatcher: Disposable | null = null;
+let revealQuietTimer: ReturnType<typeof setTimeout> | null = null;
+let revealCapTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingReveal(): void {
+	activeRevealWatcher?.dispose();
+	activeRevealWatcher = null;
+	if (revealQuietTimer) {
+		clearTimeout(revealQuietTimer);
+		revealQuietTimer = null;
+	}
+	if (revealCapTimer) {
+		clearTimeout(revealCapTimer);
+		revealCapTimer = null;
+	}
+}
 
 export function setExtensionPath(path: string): void {
 	activeExtensionPath = path;
@@ -581,26 +598,6 @@ async function resolveNavigationTarget(
 	return { file, lineToJump: line };
 }
 
-// Place the cursor on the comment line and center it. `revealLine`
-// only scrolls and leaves the cursor on whatever line it was on, so
-// we set the selection directly when an editor is available.
-async function revealCommentLine(lineToJump: number): Promise<void> {
-	await vscodeCommands.executeCommand(
-		'workbench.action.focusActiveEditorGroup'
-	);
-	const editor = window.activeTextEditor;
-	const pos = new Position(lineToJump - 1, 0);
-	if (editor) {
-		editor.selection = new Selection(pos, pos);
-		editor.revealRange(new Range(pos, pos), TextEditorRevealType.InCenter);
-		return;
-	}
-	await vscodeCommands.executeCommand('revealLine', {
-		lineNumber: lineToJump - 1,
-		at: 'center',
-	});
-}
-
 // Wait for provideCommentingRanges to create a DocumentCommentManager
 // for one of the diff URIs, then load comments only if its threads
 // aren't already populated. Reloading disposes and recreates every
@@ -624,20 +621,15 @@ async function ensureCommentsLoaded(
 	}
 }
 
-// Expand the comment thread(s) covering the target line and keep that
-// line centered while VSCode reveals the (initially expanded) widgets,
-// which would otherwise scroll it out of view.
-function expandAndKeepInView(
+// Expand the comment thread(s) covering the target line so the widget
+// reserves its layout space up front, and return the URI of the diff
+// pane that hosts the matched thread (falling back to the right pane).
+function expandTargetThreads(
 	changeID: string,
 	leftUri: Uri,
 	rightUri: Uri,
-	lineToJump: number
-): void {
-	const target0 = lineToJump - 1;
-	// URI of the diff pane that actually hosts the matched thread
-	// widget. The corrector must only manage this pane; reacting to
-	// both panes creates a scroll feedback loop (each pane's
-	// sync-scroll re-triggers the other).
+	target0: number
+): string {
 	let hostUri: string | null = null;
 
 	const expandAtLine = (mgr: DocumentCommentManager | null): void => {
@@ -665,40 +657,64 @@ function expandAndKeepInView(
 		expandAtLine(m);
 	}
 
-	// Falling back to the right pane preserves prior behavior when no
-	// diff-pane thread matched.
-	const hUri = hostUri ?? rightUri.toString();
+	return hostUri ?? rightUri.toString();
+}
 
-	// Tear down any corrector still alive from a previous navigation so
-	// the two don't fight over the scroll position of the same pane.
-	activeScrollCorrector?.dispose();
-	if (scrollCorrectorTimeout) {
-		clearTimeout(scrollCorrectorTimeout);
-		scrollCorrectorTimeout = null;
-	}
-
-	let corrections = 0;
-	activeScrollCorrector = window.onDidChangeTextEditorVisibleRanges((e) => {
-		if (e.textEditor.document.uri.toString() !== hUri) {
-			return;
-		}
-		const visible = e.textEditor.visibleRanges.some(
-			(r) => r.start.line <= target0 && target0 <= r.end.line
+// Center the comment line in its pane exactly once, after the editor
+// layout has settled. The thread widget is expanded *before* this runs
+// (see expandTargetThreads), so its height is already reserved; we then
+// wait for the visible range to go quiet rather than revealing mid-render
+// and re-correcting afterwards (the old "double scroll"). The cursor is
+// parked on the line up front, which does not scroll on its own.
+function revealCommentWhenSettled(hostUri: string, target0: number): void {
+	const findEditor = (): TextEditor | undefined =>
+		window.visibleTextEditors.find(
+			(e) => e.document.uri.toString() === hostUri
 		);
-		if (visible || corrections >= MAX_SCROLL_CORRECTIONS) {
+
+	const editor = findEditor() ?? window.activeTextEditor;
+	if (!editor) {
+		void vscodeCommands.executeCommand('revealLine', {
+			lineNumber: target0,
+			at: 'center',
+		});
+		return;
+	}
+	const pos = new Position(target0, 0);
+	editor.selection = new Selection(pos, pos);
+
+	// Replace any settle pass still pending from a previous navigation.
+	cancelPendingReveal();
+
+	let done = false;
+	const center = (): void => {
+		if (done) {
 			return;
 		}
-		corrections++;
-		e.textEditor.revealRange(
+		done = true;
+		cancelPendingReveal();
+		(findEditor() ?? editor).revealRange(
 			new Range(target0, 0, target0, 0),
 			TextEditorRevealType.InCenter
 		);
+	};
+	const scheduleQuiet = (): void => {
+		if (revealQuietTimer) {
+			clearTimeout(revealQuietTimer);
+		}
+		revealQuietTimer = setTimeout(center, VIEW_SETTLE_QUIET_MS);
+	};
+
+	activeRevealWatcher = window.onDidChangeTextEditorVisibleRanges((e) => {
+		if (e.textEditor.document.uri.toString() === hostUri) {
+			scheduleQuiet();
+		}
 	});
-	scrollCorrectorTimeout = setTimeout(() => {
-		activeScrollCorrector?.dispose();
-		activeScrollCorrector = null;
-		scrollCorrectorTimeout = null;
-	}, SCROLL_CORRECTOR_TTL_MS);
+	// Kick off the quiet window in case expanding caused no scroll (the
+	// widget rendered off-screen), and hard-cap so a never-quiet editor
+	// still gets centered once.
+	scheduleQuiet();
+	revealCapTimer = setTimeout(center, VIEW_SETTLE_MAX_MS);
 }
 
 async function navigateToComment(
@@ -765,14 +781,22 @@ async function navigateToComment(
 			...(diffCmd.arguments as unknown[])
 		);
 
-		if (lineToJump) {
-			await revealCommentLine(lineToJump);
-		}
-
 		await ensureCommentsLoaded(leftUri, rightUri);
 
 		if (lineToJump) {
-			expandAndKeepInView(change.changeID, leftUri, rightUri, lineToJump);
+			await vscodeCommands.executeCommand(
+				'workbench.action.focusActiveEditorGroup'
+			);
+			// Expand the thread first so its height is reserved, then
+			// center the line once the layout settles - a single scroll.
+			const target0 = lineToJump - 1;
+			const hostUri = expandTargetThreads(
+				change.changeID,
+				leftUri,
+				rightUri,
+				target0
+			);
+			revealCommentWhenSettled(hostUri, target0);
 		}
 	} catch (e) {
 		log('Failed to navigate to comment: ' + String(e));
