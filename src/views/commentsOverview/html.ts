@@ -18,7 +18,7 @@ export interface FileGroup {
 	comments: OverviewComment[];
 }
 
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
 	return text
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')

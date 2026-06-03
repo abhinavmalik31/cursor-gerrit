@@ -6,6 +6,10 @@ import {
 	commands as vscodeCommands,
 	WebviewPanel,
 	CommentThreadCollapsibleState,
+	Range,
+	Position,
+	Selection,
+	TextEditorRevealType,
 } from 'vscode';
 import {
 	acceptMultipleSuggestions,
@@ -23,7 +27,10 @@ import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { GerritRevisionFileStatus } from '../../lib/gerrit/gerritAPI/types';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
-import { CommentManager } from '../../providers/commentProvider';
+import {
+	CommentManager,
+	DocumentCommentManager,
+} from '../../providers/commentProvider';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
 import { buildHTML, OverviewComment, FileGroup } from './html';
 import { Repository } from '../../types/vscode-extension-git';
@@ -35,6 +42,7 @@ let activeGerritRepo: Repository | null = null;
 let activeChange: GerritChange | null = null;
 let activePatchSetNumber: number = 0;
 let activeExtensionPath: string = '';
+let navigationInProgress = false;
 
 export function setExtensionPath(path: string): void {
 	activeExtensionPath = path;
@@ -485,6 +493,238 @@ function resolveCurrentRevisionPath(
 	};
 }
 
+/**
+ * Resolve the GerritFile for a comment left on an
+ * older patchset, loaded at that patchset's revision
+ * so the original line numbers stay valid.
+ *
+ * Returns null when the revision or the file at that
+ * revision cannot be found, so the caller can fall
+ * back to mapping onto the current revision.
+ */
+async function resolveOlderPatchsetFile(
+	change: GerritChange,
+	filePath: string,
+	patchSet: number
+): Promise<GerritFile | null> {
+	const revisions = await change.revisions();
+	if (!revisions) {
+		return null;
+	}
+
+	const olderRevision = Object.values(revisions).find(
+		(r) => r.number === patchSet
+	);
+	if (!olderRevision) {
+		return null;
+	}
+
+	const direct = olderRevision._files?.[filePath];
+	if (direct) {
+		return direct;
+	}
+
+	try {
+		const filesSub = await olderRevision.files(null);
+		const files = await filesSub.getValue();
+		return files?.[filePath] ?? null;
+	} catch {
+		return null;
+	}
+}
+
+type GerritRevision = NonNullable<
+	Awaited<ReturnType<GerritChange['getCurrentRevision']>>
+>;
+
+interface NavigationTarget {
+	readonly file: GerritFile;
+	// The comment thread widget renders at the END of a range comment
+	// (the comment's `line`), so this is the line to reveal. Undefined
+	// when the old line numbers are no longer valid (file remapped onto
+	// the current revision), in which case the file opens at the top.
+	readonly lineToJump: number | undefined;
+}
+
+// Resolve which GerritFile to open and which line to reveal. Older
+// patchset comments open at the patchset they were left on so the
+// original line numbers stay valid; if that can't be resolved, the
+// path is mapped onto the current revision (handling renames/deletes).
+// Returns null when the file was deleted in a later patchset.
+async function resolveNavigationTarget(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	filePath: string,
+	line: number | undefined,
+	patchSet: number | undefined
+): Promise<NavigationTarget | null> {
+	const isOlderPatchset =
+		typeof patchSet === 'number' &&
+		activePatchSetNumber > 0 &&
+		patchSet !== activePatchSetNumber;
+
+	let targetPath = filePath;
+	let lineToJump = line;
+
+	let olderFile: GerritFile | null = null;
+	if (isOlderPatchset && typeof patchSet === 'number') {
+		olderFile = await resolveOlderPatchsetFile(change, filePath, patchSet);
+	}
+
+	if (isOlderPatchset && !olderFile) {
+		const resolved = resolveCurrentRevisionPath(
+			filePath,
+			currentRevision._files
+		);
+		if (resolved.kind === 'deleted') {
+			void window.showWarningMessage(
+				`Cannot navigate to comment: file "${filePath}" was deleted in a later patchset.`
+			);
+			return null;
+		}
+		if (resolved.kind === 'renamed') {
+			targetPath = resolved.path;
+		}
+		lineToJump = undefined;
+	}
+
+	const file =
+		olderFile ??
+		currentRevision._files?.[targetPath] ??
+		new GerritFile(
+			change.changeID,
+			change.project,
+			{
+				id: currentRevision.revisionID,
+				number: currentRevision.number,
+			},
+			targetPath,
+			{
+				lines_inserted: 0,
+				lines_deleted: 0,
+				size_delta: 0,
+				size: 0,
+				old_path: undefined,
+			}
+		);
+
+	return { file, lineToJump };
+}
+
+// Place the cursor on the comment line and center it. `revealLine`
+// only scrolls and leaves the cursor on whatever line it was on, so
+// we set the selection directly when an editor is available.
+async function revealCommentLine(lineToJump: number): Promise<void> {
+	await vscodeCommands.executeCommand(
+		'workbench.action.focusActiveEditorGroup'
+	);
+	const editor = window.activeTextEditor;
+	const pos = new Position(lineToJump - 1, 0);
+	if (editor) {
+		editor.selection = new Selection(pos, pos);
+		editor.revealRange(
+			new Range(pos, pos),
+			TextEditorRevealType.InCenter
+		);
+		return;
+	}
+	await vscodeCommands.executeCommand('revealLine', {
+		lineNumber: lineToJump - 1,
+		at: 'center',
+	});
+}
+
+// Wait for provideCommentingRanges to create a DocumentCommentManager
+// for one of the diff URIs, then load comments only if its threads
+// aren't already populated. Reloading disposes and recreates every
+// thread widget, causing the target comment to flicker.
+async function ensureCommentsLoaded(
+	leftUri: Uri,
+	rightUri: Uri
+): Promise<void> {
+	const findMgr = (): DocumentCommentManager | null =>
+		CommentManager.getFileManagerForUri(rightUri) ??
+		CommentManager.getFileManagerForUri(leftUri);
+
+	let loadedMgr = findMgr();
+	for (let i = 0; !loadedMgr && i < 30; i++) {
+		await new Promise((r) => setTimeout(r, 50));
+		loadedMgr = findMgr();
+	}
+
+	if (loadedMgr && loadedMgr.createdThreads.size === 0) {
+		await loadedMgr.loadComments();
+	}
+}
+
+// Expand the comment thread(s) covering the target line and keep that
+// line centered while VSCode reveals the (initially expanded) widgets,
+// which would otherwise scroll it out of view.
+function expandAndKeepInView(
+	changeID: string,
+	leftUri: Uri,
+	rightUri: Uri,
+	lineToJump: number
+): void {
+	const target0 = lineToJump - 1;
+	// URI of the diff pane that actually hosts the matched thread
+	// widget. The corrector must only manage this pane; reacting to
+	// both panes creates a scroll feedback loop (each pane's
+	// sync-scroll re-triggers the other).
+	let hostUri: string | null = null;
+
+	const expandAtLine = (mgr: DocumentCommentManager | null): void => {
+		if (!mgr) {
+			return;
+		}
+		for (const t of mgr.createdThreads) {
+			if (
+				t.range.start.line <= target0 &&
+				target0 <= t.range.end.line
+			) {
+				t.collapsibleState =
+					CommentThreadCollapsibleState.Expanded;
+				const tUri = t.uri.toString();
+				if (
+					hostUri === null &&
+					(tUri === rightUri.toString() ||
+						tUri === leftUri.toString())
+				) {
+					hostUri = tUri;
+				}
+			}
+		}
+	};
+
+	expandAtLine(CommentManager.getFileManagerForUri(rightUri));
+	expandAtLine(CommentManager.getFileManagerForUri(leftUri));
+	for (const m of CommentManager.getFileManagersForChangeID(changeID)) {
+		expandAtLine(m);
+	}
+
+	// Falling back to the right pane preserves prior behavior when no
+	// diff-pane thread matched.
+	const hUri = hostUri ?? rightUri.toString();
+	let corrections = 0;
+	const corrector = window.onDidChangeTextEditorVisibleRanges((e) => {
+		if (e.textEditor.document.uri.toString() !== hUri) {
+			return;
+		}
+		const visible = e.textEditor.visibleRanges.some(
+			(r) => r.start.line <= target0 && target0 <= r.end.line
+		);
+		if (visible || corrections >= 30) {
+			return;
+		}
+		corrections++;
+		e.textEditor.revealRange(
+			new Range(target0, 0, target0, 0),
+			TextEditorRevealType.InCenter
+		);
+	});
+	setTimeout(() => corrector.dispose(), 4000);
+}
+
 async function navigateToComment(
 	filePath: string,
 	line: number | undefined,
@@ -494,6 +734,13 @@ async function navigateToComment(
 	if (filePath === '/PATCHSET_LEVEL') {
 		return;
 	}
+
+	// Guard against duplicate dispatches opening multiple diffs into
+	// the same preview tab, which races/disposes the rendered thread.
+	if (navigationInProgress) {
+		return;
+	}
+	navigationInProgress = true;
 
 	try {
 		const change = activeChange;
@@ -508,63 +755,30 @@ async function navigateToComment(
 			return;
 		}
 
-		const isOlderPatchset =
-			typeof patchSet === 'number' &&
-			activePatchSetNumber > 0 &&
-			patchSet !== activePatchSetNumber;
-
-		// For older-patchset comments, resolve the file path
-		// against the current revision (handles renames/deletes).
-		// targetPath may differ from filePath when a rename occurred.
-		let targetPath = filePath;
-		let lineToJump = line;
-		if (isOlderPatchset) {
-			const resolved = resolveCurrentRevisionPath(
-				filePath,
-				currentRevision._files
-			);
-			if (resolved.kind === 'deleted') {
-				void window.showWarningMessage(
-					`Cannot navigate to comment: file "${filePath}" was deleted in a later patchset.`
-				);
-				return;
-			}
-			if (resolved.kind === 'renamed') {
-				targetPath = resolved.path;
-			}
-			// Line numbers from older patchsets may not match the
-			// current revision, so open at the top of the file.
-			lineToJump = undefined;
+		const target = await resolveNavigationTarget(
+			change,
+			currentRevision,
+			filePath,
+			line,
+			patchSet
+		);
+		if (!target) {
+			return;
 		}
+		const { file, lineToJump } = target;
 
-		const revDesc = {
-			id: currentRevision.revisionID,
-			number: currentRevision.number,
-		};
-
-		const file =
-			currentRevision._files?.[targetPath] ??
-			new GerritFile(
-				change.changeID,
-				change.project,
-				revDesc,
-				targetPath,
-				{
-					lines_inserted: 0,
-					lines_deleted: 0,
-					size_delta: 0,
-					size: 0,
-					old_path: undefined,
-				}
-			);
-
+		// Force the virtual patchset file on the right side so the
+		// gerrit comment threads render through the FileMeta-backed
+		// manager (like the normal review diff). A local on-disk
+		// right side has no FileMeta and the threads do not surface.
 		const diffCmd = await FileTreeView.createDiffCommand(
 			gerritRepo,
 			file,
-			null
+			null,
+			true
 		);
 		if (!diffCmd?.arguments) {
-			log('navigateToComment: diff command' + ' failed for ' + filePath);
+			log('navigateToComment: diff command failed for ' + filePath);
 			return;
 		}
 
@@ -576,69 +790,22 @@ async function navigateToComment(
 		);
 
 		if (lineToJump) {
-			await vscodeCommands.executeCommand(
-				'workbench.action.focusActiveEditorGroup'
-			);
-			await vscodeCommands.executeCommand('revealLine', {
-				lineNumber: lineToJump - 1,
-				at: 'center',
-			});
+			await revealCommentLine(lineToJump);
 		}
 
-		// Poll until provideCommentingRanges has
-		// fired and a DocumentCommentManager exists
-		// for one of the diff URIs. Use short ticks
-		// since data is cached - the manager should
-		// appear quickly.
-		const findMgr = ():
-			| import('../../providers/commentProvider').DocumentCommentManager
-			| null =>
-			CommentManager.getFileManagerForUri(rightUri) ??
-			CommentManager.getFileManagerForUri(leftUri);
-
-		let loadedMgr = findMgr();
-		if (!loadedMgr) {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((r) => setTimeout(r, 50));
-				loadedMgr = findMgr();
-				if (loadedMgr) {
-					break;
-				}
-			}
-		}
-
-		if (loadedMgr) {
-			await loadedMgr.loadComments();
-		}
+		await ensureCommentsLoaded(leftUri, rightUri);
 
 		if (lineToJump) {
-			const expandAtLine = (
-				mgr:
-					| import('../../providers/commentProvider').DocumentCommentManager
-					| null
-			): void => {
-				if (!mgr) {
-					return;
-				}
-				for (const t of mgr.createdThreads) {
-					if (t.range.start.line === lineToJump! - 1) {
-						t.collapsibleState =
-							CommentThreadCollapsibleState.Expanded;
-					}
-				}
-			};
-
-			expandAtLine(CommentManager.getFileManagerForUri(rightUri));
-			expandAtLine(CommentManager.getFileManagerForUri(leftUri));
-
-			const managers = CommentManager.getFileManagersForChangeID(
-				change.changeID
+			expandAndKeepInView(
+				change.changeID,
+				leftUri,
+				rightUri,
+				lineToJump
 			);
-			for (const m of managers) {
-				expandAtLine(m);
-			}
 		}
 	} catch (e) {
 		log('Failed to navigate to comment: ' + String(e));
+	} finally {
+		navigationInProgress = false;
 	}
 }
