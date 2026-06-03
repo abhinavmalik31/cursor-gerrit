@@ -10,6 +10,7 @@ import {
 	Position,
 	Selection,
 	TextEditorRevealType,
+	Disposable,
 } from 'vscode';
 import {
 	acceptMultipleSuggestions,
@@ -20,16 +21,16 @@ import {
 	GerritDraftComment,
 } from '../../lib/gerrit/gerritAPI/gerritComment';
 import {
+	CommentManager,
+	DocumentCommentManager,
+} from '../../providers/commentProvider';
+import {
 	GerritChange,
 	CommentMap,
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
-import {
-	CommentManager,
-	DocumentCommentManager,
-} from '../../providers/commentProvider';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
 import { buildHTML, OverviewComment, FileGroup } from './html';
 import { Repository } from '../../types/vscode-extension-git';
@@ -42,6 +43,20 @@ let activeChange: GerritChange | null = null;
 let activePatchSetNumber: number = 0;
 let activeExtensionPath: string = '';
 let navigationInProgress = false;
+
+// Wait for provideCommentingRanges to create the comment manager after
+// the diff opens: poll at this interval for this many attempts.
+const MANAGER_POLL_INTERVAL_MS = 50;
+const MANAGER_POLL_ATTEMPTS = 30;
+// Keep correcting the scroll position for this long after the thread
+// widget expands, capped at this many individual corrections.
+const SCROLL_CORRECTOR_TTL_MS = 4000;
+const MAX_SCROLL_CORRECTIONS = 30;
+
+// A single active scroll corrector, replaced on every navigation so two
+// navigations within SCROLL_CORRECTOR_TTL_MS can't fight over scroll.
+let activeScrollCorrector: Disposable | null = null;
+let scrollCorrectorTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export function setExtensionPath(path: string): void {
 	activeExtensionPath = path;
@@ -470,8 +485,13 @@ async function resolveOlderPatchsetFile(
 		if (fetched) {
 			return fetched;
 		}
-	} catch {
-		// Fall through and synthesize below.
+	} catch (e) {
+		// Not fatal: the file is likely just unchanged in this
+		// patchset, so we synthesize a revision-bound file below.
+		log(
+			'resolveOlderPatchsetFile: files() failed for ' +
+				`${filePath}@${patchSet}, synthesizing: ${String(e)}`
+		);
 	}
 
 	// Gerrit's file list only includes files changed in this patchset,
@@ -572,10 +592,7 @@ async function revealCommentLine(lineToJump: number): Promise<void> {
 	const pos = new Position(lineToJump - 1, 0);
 	if (editor) {
 		editor.selection = new Selection(pos, pos);
-		editor.revealRange(
-			new Range(pos, pos),
-			TextEditorRevealType.InCenter
-		);
+		editor.revealRange(new Range(pos, pos), TextEditorRevealType.InCenter);
 		return;
 	}
 	await vscodeCommands.executeCommand('revealLine', {
@@ -597,8 +614,8 @@ async function ensureCommentsLoaded(
 		CommentManager.getFileManagerForUri(leftUri);
 
 	let loadedMgr = findMgr();
-	for (let i = 0; !loadedMgr && i < 30; i++) {
-		await new Promise((r) => setTimeout(r, 50));
+	for (let i = 0; !loadedMgr && i < MANAGER_POLL_ATTEMPTS; i++) {
+		await new Promise((r) => setTimeout(r, MANAGER_POLL_INTERVAL_MS));
 		loadedMgr = findMgr();
 	}
 
@@ -628,12 +645,8 @@ function expandAndKeepInView(
 			return;
 		}
 		for (const t of mgr.createdThreads) {
-			if (
-				t.range.start.line <= target0 &&
-				target0 <= t.range.end.line
-			) {
-				t.collapsibleState =
-					CommentThreadCollapsibleState.Expanded;
+			if (t.range.start.line <= target0 && target0 <= t.range.end.line) {
+				t.collapsibleState = CommentThreadCollapsibleState.Expanded;
 				const tUri = t.uri.toString();
 				if (
 					hostUri === null &&
@@ -655,15 +668,24 @@ function expandAndKeepInView(
 	// Falling back to the right pane preserves prior behavior when no
 	// diff-pane thread matched.
 	const hUri = hostUri ?? rightUri.toString();
+
+	// Tear down any corrector still alive from a previous navigation so
+	// the two don't fight over the scroll position of the same pane.
+	activeScrollCorrector?.dispose();
+	if (scrollCorrectorTimeout) {
+		clearTimeout(scrollCorrectorTimeout);
+		scrollCorrectorTimeout = null;
+	}
+
 	let corrections = 0;
-	const corrector = window.onDidChangeTextEditorVisibleRanges((e) => {
+	activeScrollCorrector = window.onDidChangeTextEditorVisibleRanges((e) => {
 		if (e.textEditor.document.uri.toString() !== hUri) {
 			return;
 		}
 		const visible = e.textEditor.visibleRanges.some(
 			(r) => r.start.line <= target0 && target0 <= r.end.line
 		);
-		if (visible || corrections >= 30) {
+		if (visible || corrections >= MAX_SCROLL_CORRECTIONS) {
 			return;
 		}
 		corrections++;
@@ -672,7 +694,11 @@ function expandAndKeepInView(
 			TextEditorRevealType.InCenter
 		);
 	});
-	setTimeout(() => corrector.dispose(), 4000);
+	scrollCorrectorTimeout = setTimeout(() => {
+		activeScrollCorrector?.dispose();
+		activeScrollCorrector = null;
+		scrollCorrectorTimeout = null;
+	}, SCROLL_CORRECTOR_TTL_MS);
 }
 
 async function navigateToComment(
@@ -746,12 +772,7 @@ async function navigateToComment(
 		await ensureCommentsLoaded(leftUri, rightUri);
 
 		if (lineToJump) {
-			expandAndKeepInView(
-				change.changeID,
-				leftUri,
-				rightUri,
-				lineToJump
-			);
+			expandAndKeepInView(change.changeID, leftUri, rightUri, lineToJump);
 		}
 	} catch (e) {
 		log('Failed to navigate to comment: ' + String(e));

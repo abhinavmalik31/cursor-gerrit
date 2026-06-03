@@ -53,8 +53,9 @@ function renderFileGroup(
 			// Older-patchset rows keep the
 			// `older-patchset` class for visual
 			// distinction but are now clickable
-			// too -- navigation follows renames
-			// and warns on deletes.
+			// too -- they open the file at the
+			// patchset the comment was left on,
+			// where its path and line are exact.
 			const rowClass = isOlderPatchset
 				? 'comment-row older-patchset'
 				: 'comment-row';
