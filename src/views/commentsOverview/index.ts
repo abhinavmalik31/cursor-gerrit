@@ -25,7 +25,6 @@ import {
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
-import { GerritRevisionFileStatus } from '../../lib/gerrit/gerritAPI/types';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
 import {
 	CommentManager,
@@ -432,75 +431,15 @@ function groupComments(
 }
 
 /**
- * Decide which path in the current revision a
- * comment's file maps to, when the comment was
- * left on an older patchset and the file may
- * have been renamed or deleted since.
- *
- * - 'present': same path exists in current rev,
- *   open it as today.
- * - 'renamed': another file in the current rev
- *   has oldPath === commentPath, open the new
- *   path with an info toast.
- * - 'deleted': file is marked DELETED in current
- *   rev, warn and skip.
- * - 'unknown': not present and no rename target
- *   found, fall back to existing best-effort.
- */
-function resolveCurrentRevisionPath(
-	commentPath: string,
-	files: Record<string, GerritFile> | null | undefined
-): { kind: 'present' | 'unknown'; path: string }
-	| { kind: 'renamed'; path: string; oldPath: string }
-	| { kind: 'deleted'; path: string } {
-	if (!files) {
-		return {
-			kind: 'unknown',
-			path: commentPath,
-		};
-	}
-
-	const direct = files[commentPath];
-	if (direct) {
-		if (direct.status === GerritRevisionFileStatus.DELETED) {
-			return {
-				kind: 'deleted',
-				path: commentPath,
-			};
-		}
-		return {
-			kind: 'present',
-			path: commentPath,
-		};
-	}
-
-	for (const f of Object.values(files)) {
-		if (
-			f.status === GerritRevisionFileStatus.RENAMED &&
-			f.oldPath === commentPath
-		) {
-			return {
-				kind: 'renamed',
-				path: f.filePath,
-				oldPath: commentPath,
-			};
-		}
-	}
-
-	return {
-		kind: 'unknown',
-		path: commentPath,
-	};
-}
-
-/**
  * Resolve the GerritFile for a comment left on an
  * older patchset, loaded at that patchset's revision
  * so the original line numbers stay valid.
  *
- * Returns null when the revision or the file at that
- * revision cannot be found, so the caller can fall
- * back to mapping onto the current revision.
+ * When the path isn't in the patchset's changed-files
+ * list, a GerritFile bound to that revision is
+ * synthesized (its content still exists at the older
+ * commit). Returns null only when the older commit
+ * itself cannot be identified.
  */
 async function resolveOlderPatchsetFile(
 	change: GerritChange,
@@ -527,10 +466,34 @@ async function resolveOlderPatchsetFile(
 	try {
 		const filesSub = await olderRevision.files(null);
 		const files = await filesSub.getValue();
-		return files?.[filePath] ?? null;
+		const fetched = files?.[filePath];
+		if (fetched) {
+			return fetched;
+		}
 	} catch {
-		return null;
+		// Fall through and synthesize below.
 	}
+
+	// Gerrit's file list only includes files changed in this patchset,
+	// but the path's content still exists at the older commit. Bind a
+	// synthetic GerritFile to that revision so getContent() loads the
+	// older commit's version by path@commit.
+	return new GerritFile(
+		change.changeID,
+		change.project,
+		{
+			id: olderRevision.revisionID,
+			number: olderRevision.number,
+		},
+		filePath,
+		{
+			lines_inserted: 0,
+			lines_deleted: 0,
+			size_delta: 0,
+			size: 0,
+			old_path: undefined,
+		}
+	);
 }
 
 type GerritRevision = NonNullable<
@@ -540,17 +503,15 @@ type GerritRevision = NonNullable<
 interface NavigationTarget {
 	readonly file: GerritFile;
 	// The comment thread widget renders at the END of a range comment
-	// (the comment's `line`), so this is the line to reveal. Undefined
-	// when the old line numbers are no longer valid (file remapped onto
-	// the current revision), in which case the file opens at the top.
+	// (the comment's `line`), so this is the line to reveal.
 	readonly lineToJump: number | undefined;
 }
 
 // Resolve which GerritFile to open and which line to reveal. Older
-// patchset comments open at the patchset they were left on so the
-// original line numbers stay valid; if that can't be resolved, the
-// path is mapped onto the current revision (handling renames/deletes).
-// Returns null when the file was deleted in a later patchset.
+// patchset comments open at the patchset they were left on, where the
+// path always exists and the original line numbers stay valid, so later
+// renames/deletes are irrelevant. Returns null only when the older
+// commit cannot be identified.
 async function resolveNavigationTarget(
 	change: GerritChange,
 	currentRevision: GerritRevision,
@@ -563,34 +524,23 @@ async function resolveNavigationTarget(
 		activePatchSetNumber > 0 &&
 		patchSet !== activePatchSetNumber;
 
-	let targetPath = filePath;
-	let lineToJump = line;
-
-	let olderFile: GerritFile | null = null;
 	if (isOlderPatchset && typeof patchSet === 'number') {
-		olderFile = await resolveOlderPatchsetFile(change, filePath, patchSet);
-	}
-
-	if (isOlderPatchset && !olderFile) {
-		const resolved = resolveCurrentRevisionPath(
+		const olderFile = await resolveOlderPatchsetFile(
+			change,
 			filePath,
-			currentRevision._files
+			patchSet
 		);
-		if (resolved.kind === 'deleted') {
+		if (!olderFile) {
 			void window.showWarningMessage(
-				`Cannot navigate to comment: file "${filePath}" was deleted in a later patchset.`
+				`Cannot navigate to comment: patchset ${patchSet} of "${filePath}" could not be loaded.`
 			);
 			return null;
 		}
-		if (resolved.kind === 'renamed') {
-			targetPath = resolved.path;
-		}
-		lineToJump = undefined;
+		return { file: olderFile, lineToJump: line };
 	}
 
 	const file =
-		olderFile ??
-		currentRevision._files?.[targetPath] ??
+		currentRevision._files?.[filePath] ??
 		new GerritFile(
 			change.changeID,
 			change.project,
@@ -598,7 +548,7 @@ async function resolveNavigationTarget(
 				id: currentRevision.revisionID,
 				number: currentRevision.number,
 			},
-			targetPath,
+			filePath,
 			{
 				lines_inserted: 0,
 				lines_deleted: 0,
@@ -608,7 +558,7 @@ async function resolveNavigationTarget(
 			}
 		);
 
-	return { file, lineToJump };
+	return { file, lineToJump: line };
 }
 
 // Place the cursor on the comment line and center it. `revealLine`
