@@ -29,6 +29,7 @@ import { GerritSecrets } from '../credentials/secrets';
 import { GerritCredentials } from '../mcp/mcpManager';
 import { getConfiguration } from '../vscode/config';
 import { AI_COMMENT_CONTEXT } from '../util/magic';
+import { resolveCursorApiKey } from './modelSelector';
 import { ChatSession } from './chatSession';
 import { log } from '../util/log';
 
@@ -282,15 +283,7 @@ export class AiThreadManager {
 	}
 
 	private _resolveApiKey(): string | undefined {
-		const fromConfig = getConfiguration().get('gerrit.aiReview.apiKey');
-		if (fromConfig && fromConfig.trim().length > 0) {
-			return fromConfig.trim();
-		}
-		const fromEnv = process.env.CURSOR_API_KEY;
-		if (fromEnv && fromEnv.trim().length > 0) {
-			return fromEnv.trim();
-		}
-		return undefined;
+		return resolveCursorApiKey();
 	}
 
 	private async _extractCredentials(

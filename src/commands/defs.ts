@@ -22,6 +22,7 @@ import {
 	contextProp,
 	EDITOR_TEXT_FOCUS,
 	IS_GERRIT_CHANGE_EXPLORER_VIEW,
+	IS_GERRIT_MODEL_VIEW,
 	IS_GERRIT_QUICK_CHECKOUT_VIEW,
 	IS_GERRIT_SEARCH_RESULTS_VIEW,
 	IS_GERRTIT_COMMENT_CONTROLLER,
@@ -301,6 +302,7 @@ export const commands: {
 	},
 	'gerrit.selectAiModel': {
 		title: 'Select AI Review Model',
+		icon: '$(edit)',
 		inCommandPalette: true,
 	},
 	'gerrit.commentsOverview': {
@@ -756,6 +758,10 @@ export const views: {
 			{
 				command: GerritExtensionCommands.CONFIGURE_CHANGE_LIST,
 				when: and(IS_GERRIT_CHANGE_EXPLORER_VIEW),
+			},
+			{
+				command: GerritExtensionCommands.SELECT_AI_MODEL,
+				when: IS_GERRIT_MODEL_VIEW,
 			},
 		],
 	},
@@ -1285,6 +1291,42 @@ export const config = {
 			title: 'Default AI Review Model',
 			description:
 				'Default AI model to use for reviews (e.g., claude-4.6-opus, gpt-4o). Leave empty for auto-selection.',
+			default: '',
+		},
+	},
+	'gerrit.aiReview.defaultModelParams': {
+		jsonDefinition: {
+			type: 'array',
+			title: 'Default AI Review Model Parameters',
+			description:
+				'Model parameters (e.g. reasoning effort) paired with the default model. Managed by the "Select AI Model" command.',
+			__shape: '' as unknown as {
+				id: string;
+				value: string;
+			}[],
+			items: {
+				type: 'object',
+				required: ['id', 'value'],
+				properties: {
+					id: {
+						type: 'string',
+						description: 'Parameter id',
+					},
+					value: {
+						type: 'string',
+						description: 'Parameter value',
+					},
+				},
+			},
+			default: [],
+		},
+	},
+	'gerrit.aiReview.defaultModelDisplay': {
+		jsonDefinition: {
+			type: 'string',
+			title: 'Default AI Review Model (display)',
+			description:
+				'Human-readable label for the selected model, shown in the Model view. Managed by the "Select AI Model" command.',
 			default: '',
 		},
 	},

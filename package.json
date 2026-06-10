@@ -283,7 +283,8 @@
 			},
 			{
 				"command": "gerrit.selectAiModel",
-				"title": "Select AI Review Model"
+				"title": "Select AI Review Model",
+				"icon": "$(edit)"
 			},
 			{
 				"command": "gerrit.commentsOverview",
@@ -431,7 +432,8 @@
 			},
 			{
 				"command": "cmd.gerrit.selectAiModel",
-				"title": "Gerrit: Select AI Review Model"
+				"title": "Gerrit: Select AI Review Model",
+				"icon": "$(edit)"
 			}
 		],
 		"keybindings": [
@@ -1080,6 +1082,11 @@
 					"command": "gerrit.configureChangeList",
 					"when": "view == gerrit:changeExplorer",
 					"group": "navigation@5"
+				},
+				{
+					"command": "gerrit.selectAiModel",
+					"when": "view == gerrit:model",
+					"group": "navigation@6"
 				}
 			],
 			"editor/title": [
@@ -1173,6 +1180,13 @@
 					"name": "Quick Checkout",
 					"type": "tree",
 					"visibility": "collapsed",
+					"when": "gerrit:isUsingGerrit"
+				},
+				{
+					"id": "gerrit:model",
+					"name": "Model",
+					"type": "tree",
+					"visibility": "visible",
 					"when": "gerrit:isUsingGerrit"
 				}
 			]
@@ -1628,6 +1642,35 @@
 					"type": "string",
 					"title": "Default AI Review Model",
 					"description": "Default AI model to use for reviews (e.g., claude-4.6-opus, gpt-4o). Leave empty for auto-selection.",
+					"default": ""
+				},
+				"gerrit.aiReview.defaultModelParams": {
+					"type": "array",
+					"title": "Default AI Review Model Parameters",
+					"description": "Model parameters (e.g. reasoning effort) paired with the default model. Managed by the \"Select AI Model\" command.",
+					"items": {
+						"type": "object",
+						"required": [
+							"id",
+							"value"
+						],
+						"properties": {
+							"id": {
+								"type": "string",
+								"description": "Parameter id"
+							},
+							"value": {
+								"type": "string",
+								"description": "Parameter value"
+							}
+						}
+					},
+					"default": []
+				},
+				"gerrit.aiReview.defaultModelDisplay": {
+					"type": "string",
+					"title": "Default AI Review Model (display)",
+					"description": "Human-readable label for the selected model, shown in the Model view. Managed by the \"Select AI Model\" command.",
 					"default": ""
 				},
 				"gerrit.aiReview.customPromptFile": {

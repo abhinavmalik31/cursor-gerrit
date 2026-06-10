@@ -10,6 +10,7 @@ import { getReviewedStatusDecorationProvider } from './providers/reviewedStatusD
 import { FileModificationStatusProvider } from './providers/fileModificationStatusProvider';
 import { showQuickCheckoutStatusBarIcons } from './views/statusBar/quickCheckoutStatusBar';
 import { getOrCreateQuickCheckoutTreeProvider } from './views/activityBar/quickCheckout';
+import { getOrCreateModelTreeProvider } from './views/activityBar/model';
 import {
 	ConfigurationTarget,
 	ExtensionContext,
@@ -157,6 +158,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	// Register tree views
 	context.subscriptions.push(getOrCreateChangesTreeProvider(gerritRepo));
 	context.subscriptions.push(getOrCreateQuickCheckoutTreeProvider());
+	context.subscriptions.push(getOrCreateModelTreeProvider());
 	context.subscriptions.push(
 		window.registerWebviewViewProvider(
 			'gerrit:review',

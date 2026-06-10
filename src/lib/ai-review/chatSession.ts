@@ -13,7 +13,7 @@
 
 import type { McpServerConfig, SDKAgent } from '@cursor/sdk';
 import type { GerritCredentials } from '../mcp/mcpManager';
-import { getDefaultModel } from './modelSelector';
+import { getDefaultModelSelection } from './modelSelector';
 import { log } from '../util/log';
 import * as path from 'path';
 
@@ -95,10 +95,9 @@ export class ChatSession {
 			),
 		};
 
-		const modelId = getDefaultModel();
 		const agent = await sdk.Agent.create({
 			apiKey: opts.apiKey,
-			model: modelId ? { id: modelId } : { id: 'auto' },
+			model: getDefaultModelSelection(),
 			local: {
 				cwd: opts.cwd,
 			},
