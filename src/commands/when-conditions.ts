@@ -1,5 +1,6 @@
 import {
 	GERRIT_CHANGE_EXPLORER_VIEW,
+	GERRIT_MODEL_VIEW,
 	GERRIT_QUICK_CHECKOUT_VIEW,
 	GERRIT_SEARCH_RESULTS_VIEW,
 } from '../lib/util/constants';
@@ -20,6 +21,7 @@ export const IS_GERRIT_CHANGE_EXPLORER_VIEW = isView(
 );
 export const IS_GERRIT_QUICK_CHECKOUT_VIEW = isView(GERRIT_QUICK_CHECKOUT_VIEW);
 export const IS_GERRIT_SEARCH_RESULTS_VIEW = isView(GERRIT_SEARCH_RESULTS_VIEW);
+export const IS_GERRIT_MODEL_VIEW = isView(GERRIT_MODEL_VIEW);
 export const SCM_PROVIDER_IS_GIT = scmProviderContains('git');
 
 export const EDITOR_TEXT_FOCUS = 'editorTextFocus';

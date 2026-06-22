@@ -17,7 +17,6 @@ import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { GerritSecrets } from '../credentials/secrets';
 import { getConfiguration } from '../vscode/config';
 import { getGerritRepo } from '../gerrit/gerrit';
-import { selectAiModel } from './modelSelector';
 import { tryExecAsync } from '../git/gitCLI';
 import { runPreflight } from './preflight';
 import { spawn } from 'child_process';
@@ -34,12 +33,6 @@ export async function enableAiReview(context: ExtensionContext): Promise<void> {
 		const config = getConfiguration();
 
 		const { agent } = await resolvePrerequisites();
-
-		const modelResult = await selectAiModel();
-		if (modelResult === undefined) {
-			void window.showInformationMessage('AI Review setup cancelled.');
-			throw new UserCancelledError('selectModel');
-		}
 
 		const checkoutBehavior = await pickCheckoutBehavior();
 		if (!checkoutBehavior) {

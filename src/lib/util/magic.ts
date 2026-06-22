@@ -28,3 +28,7 @@ export const TREE_ITEM_IS_NOT_CURRENT = 'noCurrent';
 export const OPEN_FILE_HAS_UNRESOLVED_COMMENTS = 'hasUnresolved';
 export const OPEN_FILE_IS_PATCHSET_LEVEL_FILE = 'patchsetLevel';
 export const OPEN_FILE_IS_CHANGE_DIFF = 'gerritDiff';
+
+// Marker for the synthetic AI Reviewer comments rendered inside
+// Gerrit threads by the inline AI chat feature.
+export const AI_COMMENT_CONTEXT = 'gerritAiReviewerComment';
