@@ -45,16 +45,12 @@ export class ModelTreeProvider
 	public constructor() {
 		// Primary, instant signal: fires the moment a selection is
 		// confirmed, before it persists to settings.
-		this._disposables.push(
-			onDidChangeModelSelection(() => this.refresh())
-		);
+		this._disposables.push(onDidChangeModelSelection(() => this.refresh()));
 		// Fallback for external edits to the settings directly.
 		this._disposables.push(
 			workspace.onDidChangeConfiguration((e) => {
 				if (
-					e.affectsConfiguration(
-						'gerrit.aiReview.defaultModel'
-					) ||
+					e.affectsConfiguration('gerrit.aiReview.defaultModel') ||
 					e.affectsConfiguration(
 						'gerrit.aiReview.defaultModelDisplay'
 					)

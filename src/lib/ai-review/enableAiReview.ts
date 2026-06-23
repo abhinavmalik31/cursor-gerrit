@@ -1,8 +1,4 @@
 import {
-	AgentCommand,
-	buildMcpEnableCommand,
-} from './agentCli';
-import {
 	window,
 	workspace,
 	ExtensionContext,
@@ -15,6 +11,7 @@ import { getGerritURLFromReviewFile } from '../credentials/enterCredentials';
 import { UserCancelledError, isUserCancelledError } from '../util/errors';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
+import { AgentCommand, buildMcpEnableCommand } from './agentCli';
 import { GerritSecrets } from '../credentials/secrets';
 import { resolveCursorApiKey } from './modelSelector';
 import { getConfiguration } from '../vscode/config';

@@ -10,7 +10,6 @@ import { getReviewedStatusDecorationProvider } from './providers/reviewedStatusD
 import { FileModificationStatusProvider } from './providers/fileModificationStatusProvider';
 import { showQuickCheckoutStatusBarIcons } from './views/statusBar/quickCheckoutStatusBar';
 import { getOrCreateQuickCheckoutTreeProvider } from './views/activityBar/quickCheckout';
-import { getOrCreateModelTreeProvider } from './views/activityBar/model';
 import {
 	ConfigurationTarget,
 	ExtensionContext,
@@ -27,6 +26,7 @@ import { FileProvider, GERRIT_FILE_SCHEME } from './providers/fileProvider';
 import { getConfiguration, initConfigListener } from './lib/vscode/config';
 import { setContextProp, setDefaultContexts } from './lib/vscode/context';
 import { createAutoRegisterCommand } from 'vscode-generate-package-json';
+import { getOrCreateModelTreeProvider } from './views/activityBar/model';
 import { getAPI, setAPIGitReviewFile } from './lib/gerrit/gerritAPI';
 import { GerritExtensionCommands } from './commands/command-names';
 import { AiThreadManager } from './lib/ai-review/aiThreadManager';
