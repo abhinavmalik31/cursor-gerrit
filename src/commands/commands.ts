@@ -74,6 +74,7 @@ import { ChangeTreeView } from '../views/activityBar/changes/changeTreeView';
 import { QuickCheckoutTreeEntry } from '../views/activityBar/quickCheckout';
 import { listenForStreamEvents } from '../lib/stream-events/stream-events';
 import { GerritCommentBase } from '../lib/gerrit/gerritAPI/gerritComment';
+import { deleteCredentials } from '../lib/credentials/deleteCredentials';
 import { createAutoRegisterCommand } from 'vscode-generate-package-json';
 import { enterCredentials } from '../lib/credentials/enterCredentials';
 import { rebaseOntoParent, recursiveRebase } from '../lib/git/rebase';
@@ -141,6 +142,11 @@ export function registerCommands(
 	context.subscriptions.push(
 		registerCommand(GerritExtensionCommands.ENTER_CREDENTIALS, () =>
 			enterCredentials(gerritRepo)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(GerritExtensionCommands.DELETE_CREDENTIALS, () =>
+			deleteCredentials(gerritRepo)
 		)
 	);
 	context.subscriptions.push(

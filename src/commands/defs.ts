@@ -125,6 +125,10 @@ export const commands: {
 		title: 'Enter credentials',
 		inCommandPalette: true,
 	},
+	'gerrit.deleteCredentials': {
+		title: 'Delete stored credentials',
+		inCommandPalette: true,
+	},
 	'gerrit.fetchMore': {
 		title: 'Fetch More',
 		inCommandPalette: false,
