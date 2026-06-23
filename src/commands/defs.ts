@@ -1,4 +1,5 @@
 import {
+	AI_COMMENT_CONTEXT,
 	COMMENT_IS_DELETABLE,
 	COMMENT_IS_EDITABLE,
 	COMMENT_QUICK_ACTIONS_POSSIBLE,
@@ -21,6 +22,7 @@ import {
 	contextProp,
 	EDITOR_TEXT_FOCUS,
 	IS_GERRIT_CHANGE_EXPLORER_VIEW,
+	IS_GERRIT_MODEL_VIEW,
 	IS_GERRIT_QUICK_CHECKOUT_VIEW,
 	IS_GERRIT_SEARCH_RESULTS_VIEW,
 	IS_GERRTIT_COMMENT_CONTROLLER,
@@ -300,6 +302,7 @@ export const commands: {
 	},
 	'gerrit.selectAiModel': {
 		title: 'Select AI Review Model',
+		icon: '$(edit)',
 		inCommandPalette: true,
 	},
 	'gerrit.commentsOverview': {
@@ -310,6 +313,42 @@ export const commands: {
 	'gerrit.acceptSuggestion': {
 		title: 'Accept Suggestion',
 		icon: '$(lightbulb)',
+		inCommandPalette: false,
+	},
+	'gerrit.askAiInThread': {
+		title: 'Ask AI',
+		icon: '$(hubot)',
+		inCommandPalette: false,
+		enablement: 'true',
+	},
+	'gerrit.cancelAiInThread': {
+		title: 'Cancel AI',
+		icon: '$(stop-circle)',
+		inCommandPalette: false,
+	},
+	'gerrit.endAiInThread': {
+		title: 'End AI Chat',
+		icon: '$(close)',
+		inCommandPalette: false,
+	},
+	'gerrit.clearAiInThread': {
+		title: 'Clear AI Output',
+		icon: '$(clear-all)',
+		inCommandPalette: false,
+	},
+	'gerrit.postAiAsDraftResolved': {
+		title: 'Post AI as draft (resolved)',
+		icon: '$(comment-discussion)',
+		inCommandPalette: false,
+	},
+	'gerrit.postAiAsDraftUnresolved': {
+		title: 'Post AI as draft (unresolved)',
+		icon: '$(comment-unresolved)',
+		inCommandPalette: false,
+	},
+	'gerrit.deleteAiComment': {
+		title: 'Delete AI message',
+		icon: '$(trash)',
 		inCommandPalette: false,
 	},
 };
@@ -332,6 +371,10 @@ export const views: {
 	'comments/comment/context': {
 		newCommentButtons: [
 			{
+				command: GerritExtensionCommands.ASK_AI_IN_THREAD,
+				when: IS_GERRTIT_COMMENT_CONTROLLER,
+			},
+			{
 				command: GerritExtensionCommands.CREATE_COMMENT_UNRESOLVED,
 				when: IS_GERRTIT_COMMENT_CONTROLLER,
 			},
@@ -347,6 +390,10 @@ export const views: {
 	},
 	'comments/commentThread/context': {
 		newCommentButtons: [
+			{
+				command: GerritExtensionCommands.ASK_AI_IN_THREAD,
+				when: IS_GERRTIT_COMMENT_CONTROLLER,
+			},
 			{
 				command: GerritExtensionCommands.CREATE_COMMENT_UNRESOLVED,
 				when: IS_GERRTIT_COMMENT_CONTROLLER,
@@ -387,6 +434,18 @@ export const views: {
 			},
 			{
 				command: GerritExtensionCommands.NEXT_UNRESOLVED_COMMENT,
+				when: IS_GERRTIT_COMMENT_CONTROLLER,
+			},
+			{
+				command: GerritExtensionCommands.CANCEL_AI_IN_THREAD,
+				when: IS_GERRTIT_COMMENT_CONTROLLER,
+			},
+			{
+				command: GerritExtensionCommands.CLEAR_AI_IN_THREAD,
+				when: IS_GERRTIT_COMMENT_CONTROLLER,
+			},
+			{
+				command: GerritExtensionCommands.END_AI_IN_THREAD,
 				when: IS_GERRTIT_COMMENT_CONTROLLER,
 			},
 			{
@@ -440,6 +499,27 @@ export const views: {
 				when: and(
 					IS_GERRTIT_COMMENT_CONTROLLER,
 					commentContains(COMMENT_QUICK_ACTIONS_POSSIBLE)
+				),
+			},
+			{
+				command: GerritExtensionCommands.POST_AI_AS_DRAFT_UNRESOLVED,
+				when: and(
+					IS_GERRTIT_COMMENT_CONTROLLER,
+					commentContains(AI_COMMENT_CONTEXT)
+				),
+			},
+			{
+				command: GerritExtensionCommands.POST_AI_AS_DRAFT_RESOLVED,
+				when: and(
+					IS_GERRTIT_COMMENT_CONTROLLER,
+					commentContains(AI_COMMENT_CONTEXT)
+				),
+			},
+			{
+				command: GerritExtensionCommands.DELETE_AI_COMMENT,
+				when: and(
+					IS_GERRTIT_COMMENT_CONTROLLER,
+					commentContains(AI_COMMENT_CONTEXT)
 				),
 			},
 		],
@@ -678,6 +758,10 @@ export const views: {
 			{
 				command: GerritExtensionCommands.CONFIGURE_CHANGE_LIST,
 				when: and(IS_GERRIT_CHANGE_EXPLORER_VIEW),
+			},
+			{
+				command: GerritExtensionCommands.SELECT_AI_MODEL,
+				when: IS_GERRIT_MODEL_VIEW,
 			},
 		],
 	},
@@ -1210,6 +1294,42 @@ export const config = {
 			default: '',
 		},
 	},
+	'gerrit.aiReview.defaultModelParams': {
+		jsonDefinition: {
+			type: 'array',
+			title: 'Default AI Review Model Parameters',
+			description:
+				'Model parameters (e.g. reasoning effort) paired with the default model. Managed by the "Select AI Model" command.',
+			__shape: '' as unknown as {
+				id: string;
+				value: string;
+			}[],
+			items: {
+				type: 'object',
+				required: ['id', 'value'],
+				properties: {
+					id: {
+						type: 'string',
+						description: 'Parameter id',
+					},
+					value: {
+						type: 'string',
+						description: 'Parameter value',
+					},
+				},
+			},
+			default: [],
+		},
+	},
+	'gerrit.aiReview.defaultModelDisplay': {
+		jsonDefinition: {
+			type: 'string',
+			title: 'Default AI Review Model (display)',
+			description:
+				'Human-readable label for the selected model, shown in the Model view. Managed by the "Select AI Model" command.',
+			default: '',
+		},
+	},
 	'gerrit.aiReview.customPromptFile': {
 		jsonDefinition: {
 			type: 'string',
@@ -1217,6 +1337,15 @@ export const config = {
 			description:
 				'Path to a custom Markdown file with additional review guidelines (relative to workspace root)',
 			default: '.gerrit-ai-prompt.md',
+		},
+	},
+	'gerrit.aiReview.apiKey': {
+		jsonDefinition: {
+			type: 'string',
+			title: 'Cursor API Key (for inline AI chat)',
+			description:
+				'API key used by the inline "Ask AI" comment-thread chat. Leave empty to fall back to the CURSOR_API_KEY environment variable. Mint a key at https://cursor.com/dashboard/integrations.',
+			default: '',
 		},
 	},
 } as const;

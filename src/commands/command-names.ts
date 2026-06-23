@@ -56,4 +56,11 @@ export enum GerritExtensionCommands {
 	SELECT_AI_MODEL = 'gerrit.selectAiModel',
 	COMMENTS_OVERVIEW = 'gerrit.commentsOverview',
 	ACCEPT_SUGGESTION = 'gerrit.acceptSuggestion',
+	ASK_AI_IN_THREAD = 'gerrit.askAiInThread',
+	CANCEL_AI_IN_THREAD = 'gerrit.cancelAiInThread',
+	END_AI_IN_THREAD = 'gerrit.endAiInThread',
+	CLEAR_AI_IN_THREAD = 'gerrit.clearAiInThread',
+	POST_AI_AS_DRAFT_RESOLVED = 'gerrit.postAiAsDraftResolved',
+	POST_AI_AS_DRAFT_UNRESOLVED = 'gerrit.postAiAsDraftUnresolved',
+	DELETE_AI_COMMENT = 'gerrit.deleteAiComment',
 }

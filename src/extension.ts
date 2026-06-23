@@ -10,6 +10,7 @@ import { getReviewedStatusDecorationProvider } from './providers/reviewedStatusD
 import { FileModificationStatusProvider } from './providers/fileModificationStatusProvider';
 import { showQuickCheckoutStatusBarIcons } from './views/statusBar/quickCheckoutStatusBar';
 import { getOrCreateQuickCheckoutTreeProvider } from './views/activityBar/quickCheckout';
+import { getOrCreateModelTreeProvider } from './views/activityBar/model';
 import {
 	ConfigurationTarget,
 	ExtensionContext,
@@ -28,6 +29,7 @@ import { setContextProp, setDefaultContexts } from './lib/vscode/context';
 import { createAutoRegisterCommand } from 'vscode-generate-package-json';
 import { getAPI, setAPIGitReviewFile } from './lib/gerrit/gerritAPI';
 import { GerritExtensionCommands } from './commands/command-names';
+import { AiThreadManager } from './lib/ai-review/aiThreadManager';
 import { GERRIT_SEARCH_RESULTS_VIEW } from './lib/util/constants';
 import { getGerritRepo, pickGitRepo } from './lib/gerrit/gerrit';
 import { GerritUser } from './lib/gerrit/gerritAPI/gerritUser';
@@ -95,6 +97,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
 		})
 	);
 
+	// Wire AI inline-chat manager with the extension path so
+	// it can spawn the bundled gerrit MCP server.
+	AiThreadManager.instance.setExtensionPath(context.extensionPath);
+	context.subscriptions.push({
+		dispose: () => {
+			void AiThreadManager.instance.disposeAll();
+		},
+	});
+
 	// Register commands
 	const statusBar = new CurrentChangeStatusBarManager();
 	context.subscriptions.push(statusBar);
@@ -147,6 +158,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	// Register tree views
 	context.subscriptions.push(getOrCreateChangesTreeProvider(gerritRepo));
 	context.subscriptions.push(getOrCreateQuickCheckoutTreeProvider());
+	context.subscriptions.push(getOrCreateModelTreeProvider());
 	context.subscriptions.push(
 		window.registerWebviewViewProvider(
 			'gerrit:review',

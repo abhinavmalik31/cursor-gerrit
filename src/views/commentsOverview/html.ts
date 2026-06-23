@@ -29,7 +29,7 @@ function escapeHtml(text: string): string {
 function renderFileGroup(
 	group: FileGroup,
 	isOlderPatchset: boolean = false,
-	_showCheckboxes: boolean = false
+	showCheckboxes: boolean = false
 ): string {
 	const commentRows = group.comments
 		.map((c) => {
@@ -60,6 +60,16 @@ function renderFileGroup(
 				? 'comment-row older-patchset'
 				: 'comment-row';
 
+			const checkbox = showCheckboxes
+				? `<input type="checkbox"
+		class="comment-check"
+		data-file="${escapeHtml(c.filePath)}"
+		data-line="${c.line ?? ''}"
+		data-message="${escapeHtml(c.message)}"
+		data-comment-id="${escapeHtml(c.commentId ?? '')}"
+		onclick="event.stopPropagation()">`
+				: '';
+
 			return `
 <div class="${rowClass}"
 	data-file="${escapeHtml(c.filePath)}"
@@ -67,6 +77,7 @@ function renderFileGroup(
 	data-patchset="${c.patchSet ?? ''}"
 	onclick="navigate(this)">
 	<div class="comment-header">
+		${checkbox}
 		<span class="location">
 			Line ${c.line ?? 'file-level'}
 		</span>
@@ -120,11 +131,22 @@ export function buildHTML(
 		olderPatchsetGroups.length > 0
 			? `
 <div class="section older-patchset-section">
-	<h2>
-		<span class="codicon codicon-history"></span>
-		Older Patchset Comments (${olderCount})
-	</h2>
-	${olderPatchsetGroups.map((g) => renderFileGroup(g, true)).join('')}
+  <div class="section-header-row">
+    <h2>
+      <span class="codicon codicon-history"></span>
+      Older Patchset Comments (${olderCount})
+    </h2>
+    <button class="accept-btn" onclick="acceptSelected()">
+      Accept Selected Suggestions
+    </button>
+  </div>
+  <div class="older-patchset-note">
+    These comments are from an older patchset.
+    Clicking opens the file at the patchset the
+    comment was left on, where its path and line
+    are exact.
+  </div>
+  ${olderPatchsetGroups.map((g) => renderFileGroup(g, true, true)).join('')}
 </div>`
 			: '';
 
@@ -153,7 +175,7 @@ export function buildHTML(
       Accept Selected Suggestions
     </button>
   </div>
-  ${unresolvedGroups.map((g) => renderFileGroup(g, false)).join('')}
+  ${unresolvedGroups.map((g) => renderFileGroup(g, false, true)).join('')}
 </div>`
 			: '';
 

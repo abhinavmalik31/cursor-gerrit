@@ -427,6 +427,7 @@ function groupComments(
 					unresolved: threadUnresolved,
 					codeSnippet: extractSnippet(lines, c.line),
 					patchSet: c.patchSet,
+					commentId: c.id,
 				};
 
 				if (c.isDraft) {

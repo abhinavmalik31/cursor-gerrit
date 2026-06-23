@@ -9,7 +9,14 @@ import {
 	ackComment,
 	copyCommentLink,
 	openCommentOnline,
+	askAiInThread,
+	cancelAiInThread,
+	endAiInThread,
+	clearAiInThread,
+	postAiAsDraft,
+	deleteAiComment,
 } from '../providers/commentProvider';
+import { AiReviewerComment } from '../lib/ai-review/aiReviewerComment';
 
 import {
 	openFileOnline,
@@ -621,6 +628,51 @@ export function registerCommands(
 			GerritExtensionCommands.ACCEPT_SUGGESTION,
 			(comment: GerritCommentBase) =>
 				acceptSuggestion(comment, gerritRepo, context.extensionPath)
+		)
+	);
+
+	// AI inline chat (per comment thread)
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.ASK_AI_IN_THREAD,
+			(reply: NewlyCreatedGerritCommentReply | GerritCommentBase) =>
+				askAiInThread(reply, gerritRepo)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.CANCEL_AI_IN_THREAD,
+			(thread: CommentThread) => cancelAiInThread(thread)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.END_AI_IN_THREAD,
+			(thread: CommentThread) => endAiInThread(thread)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.CLEAR_AI_IN_THREAD,
+			(thread: CommentThread) => clearAiInThread(thread)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.POST_AI_AS_DRAFT_RESOLVED,
+			(comment: AiReviewerComment) => postAiAsDraft(comment, true)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.POST_AI_AS_DRAFT_UNRESOLVED,
+			(comment: AiReviewerComment) => postAiAsDraft(comment, false)
+		)
+	);
+	context.subscriptions.push(
+		registerCommand(
+			GerritExtensionCommands.DELETE_AI_COMMENT,
+			(comment: AiReviewerComment) => deleteAiComment(comment)
 		)
 	);
 }
