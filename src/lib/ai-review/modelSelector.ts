@@ -4,8 +4,8 @@ import type {
 	ModelParameterValue,
 	ModelSelection,
 } from '@cursor/sdk';
-import { getConfiguration } from '../vscode/config';
 import { Event, EventEmitter, QuickPickItem, window } from 'vscode';
+import { getConfiguration } from '../vscode/config';
 import { log } from '../util/log';
 
 const CUSTOM_ID = '__custom__';
@@ -25,8 +25,7 @@ let cachedSelection: CachedSelection | undefined;
 
 const modelChangeEmitter = new EventEmitter<void>();
 /** Fires as soon as the model selection changes (before it persists). */
-export const onDidChangeModelSelection: Event<void> =
-	modelChangeEmitter.event;
+export const onDidChangeModelSelection: Event<void> = modelChangeEmitter.event;
 
 /**
  * Resolve the Cursor API key used for catalog/account operations
@@ -50,9 +49,7 @@ export function resolveCursorApiKey(): string | undefined {
  * authenticated user. Requires an API key; throws if the catalog
  * call fails (no key, offline, rate-limited, etc.).
  */
-async function fetchAvailableModels(
-	apiKey?: string
-): Promise<ModelListItem[]> {
+async function fetchAvailableModels(apiKey?: string): Promise<ModelListItem[]> {
 	const sdk = await import('@cursor/sdk');
 	return sdk.Cursor.models.list(apiKey ? { apiKey } : undefined);
 }
@@ -109,7 +106,7 @@ async function selectParameterValue(
 	if (!picked) {
 		return undefined;
 	}
-	return picked.unset ? null : picked.value ?? null;
+	return picked.unset ? null : (picked.value ?? null);
 }
 
 /**
@@ -136,9 +133,7 @@ async function customizeParameters(
 			const valDef = d.values.find((v) => v.value === valId);
 			return {
 				label: d.displayName || d.id,
-				description: valId
-					? valDef?.displayName || valId
-					: '(default)',
+				description: valId ? valDef?.displayName || valId : '(default)',
 				paramId: d.id,
 			};
 		});
@@ -220,9 +215,7 @@ async function selectModelParameters(
 	model: ModelListItem
 ): Promise<ModelParameterValue[] | undefined> {
 	const variants = model.variants ?? [];
-	const namedDefs = (model.parameters ?? []).filter(
-		(d) => !!d.displayName
-	);
+	const namedDefs = (model.parameters ?? []).filter((d) => !!d.displayName);
 	const hasVariants = variants.length > 0;
 	const hasParams = namedDefs.length > 0;
 
@@ -250,8 +243,7 @@ async function selectModelParameters(
 		// `displayName` is often just the model name (identical for
 		// every variant), so prefer it only when it adds information
 		// and otherwise describe the variant by its named params.
-		const distinct =
-			v.displayName && v.displayName !== model.displayName;
+		const distinct = v.displayName && v.displayName !== model.displayName;
 		const label = distinct
 			? v.displayName
 			: describeParams(v.params, namedDefs);
@@ -349,8 +341,7 @@ export async function selectAiModel(): Promise<string | undefined> {
 	for (const m of fetched) {
 		items.push({
 			label: m.displayName || m.id,
-			description:
-				m.id === currentModel ? '(current)' : m.description,
+			description: m.id === currentModel ? '(current)' : m.description,
 			id: m.id,
 			model: m,
 		});

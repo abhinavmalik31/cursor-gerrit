@@ -27,9 +27,9 @@ import { FileMeta } from '../../providers/fileProvider';
 import { AiReviewerComment } from './aiReviewerComment';
 import { GerritSecrets } from '../credentials/secrets';
 import { GerritCredentials } from '../mcp/mcpManager';
+import { resolveCursorApiKey } from './modelSelector';
 import { getConfiguration } from '../vscode/config';
 import { AI_COMMENT_CONTEXT } from '../util/magic';
-import { resolveCursorApiKey } from './modelSelector';
 import { ChatSession } from './chatSession';
 import { log } from '../util/log';
 
