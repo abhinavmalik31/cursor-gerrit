@@ -7,6 +7,7 @@ import {
 	workspace,
 	ExtensionContext,
 	ProgressLocation,
+	ConfigurationTarget,
 	env,
 	Uri,
 } from 'vscode';
@@ -15,6 +16,7 @@ import { UserCancelledError, isUserCancelledError } from '../util/errors';
 import { getGitReviewFileCached } from '../credentials/gitReviewFile';
 import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { GerritSecrets } from '../credentials/secrets';
+import { resolveCursorApiKey } from './modelSelector';
 import { getConfiguration } from '../vscode/config';
 import { getGerritRepo } from '../gerrit/gerrit';
 import { tryExecAsync } from '../git/gitCLI';
@@ -44,6 +46,8 @@ export async function enableAiReview(context: ExtensionContext): Promise<void> {
 			'gerrit.aiReview.checkoutBehavior',
 			checkoutBehavior
 		);
+
+		await ensureCursorApiKey();
 
 		const ok = await window.withProgress(
 			{
@@ -325,6 +329,74 @@ async function pickCheckoutBehavior(): Promise<CheckoutBehavior | undefined> {
 	});
 
 	return selected?.value;
+}
+
+const API_KEY_DASHBOARD_URL =
+	'https://cursor.com/dashboard/api?section=user-keys#user-api-keys';
+
+const API_KEY_STEPS =
+	'How to get a Cursor API key:\n' +
+	'1. Open ' +
+	API_KEY_DASHBOARD_URL +
+	'\n' +
+	'2. Click "Add" (or "Create new key").\n' +
+	'3. Enter a name for the API key.\n' +
+	'4. Copy the generated API key.\n' +
+	'5. Paste it into the dialog box below.';
+
+/**
+ * Make sure a Cursor API key is available for the inline "Ask AI"
+ * chat (which talks to the Cursor SDK). If one is already resolvable
+ * from settings or the CURSOR_API_KEY env var we leave it untouched;
+ * otherwise we offer to collect one and persist it globally. The key
+ * is optional, so a user who skips can still finish setup and add it
+ * later.
+ */
+async function ensureCursorApiKey(): Promise<void> {
+	if (resolveCursorApiKey()) {
+		return;
+	}
+
+	const pick = await window.showInformationMessage(
+		'AI Review can use a Cursor API key for the inline ' +
+			'"Ask AI" chat. Add one now? You can also set it ' +
+			'later via the "gerrit.aiReview.apiKey" setting or ' +
+			'the CURSOR_API_KEY environment variable.\n\n' +
+			API_KEY_STEPS,
+		{ modal: true },
+		'Open Dashboard & Enter Key',
+		'Enter API Key'
+	);
+
+	if (pick !== 'Open Dashboard & Enter Key' && pick !== 'Enter API Key') {
+		return;
+	}
+
+	if (pick === 'Open Dashboard & Enter Key') {
+		await env.openExternal(Uri.parse(API_KEY_DASHBOARD_URL));
+	}
+
+	const apiKey = await window.showInputBox({
+		title: 'Gerrit: Cursor API Key',
+		prompt:
+			'Paste your Cursor API key from ' +
+			API_KEY_DASHBOARD_URL +
+			'. Leave empty to skip.',
+		password: true,
+		ignoreFocusOut: true,
+	});
+
+	const trimmed = apiKey?.trim();
+	if (!trimmed) {
+		return;
+	}
+
+	await getConfiguration().update(
+		'gerrit.aiReview.apiKey',
+		trimmed,
+		ConfigurationTarget.Global
+	);
+	log('Cursor API key saved for AI Review');
 }
 
 async function extractCredentials(
