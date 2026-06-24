@@ -1258,6 +1258,15 @@ export const config = {
 			default: false,
 		},
 	},
+	'gerrit.autoUpdate.enabled': {
+		jsonDefinition: {
+			type: 'boolean',
+			title: 'Automatically update the Gerrit extension',
+			description:
+				'Check the internal update server on startup and install a newer extension version automatically when one is available.',
+			default: true,
+		},
+	},
 	'gerrit.customAuthUrlPrefix': {
 		jsonDefinition: {
 			type: 'string',
