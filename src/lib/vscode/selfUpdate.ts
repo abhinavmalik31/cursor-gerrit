@@ -98,6 +98,9 @@ async function installAndReload(latest: VsixCandidate): Promise<void> {
 		log(`Failed to install Gerrit update: ${(e as Error).toString()}`);
 		await promptManualDownload(latest.fileName);
 		return;
+	} finally {
+		// Best-effort cleanup; the vsix is only needed during install.
+		await fs.rm(vsixPath, { force: true }).catch(() => {});
 	}
 
 	const reload = 'Reload now';
