@@ -28,12 +28,15 @@ function isNewer(remote: readonly number[], local: readonly number[]): boolean {
 	return false;
 }
 
-function rejectUnauthorized(): boolean {
-	return !getConfiguration().get('gerrit.allowInvalidSSLCerts', false);
+function updateBaseUrl(): string {
+	return (
+		getConfiguration().get('gerrit.autoUpdate.url', '') ||
+		GERRIT_UPDATE_BASE_URL
+	);
 }
 
 function autoUpdateEnabled(): boolean {
-	return getConfiguration().get('gerrit.autoUpdate.enabled', true);
+	return getConfiguration().get('gerrit.autoUpdate.enabled', false);
 }
 
 function parseCandidates(html: string): VsixCandidate[] {
@@ -65,9 +68,9 @@ function pickLatest(candidates: VsixCandidate[]): VsixCandidate | null {
 }
 
 async function downloadVsix(fileName: string): Promise<string> {
-	const url = new URL(fileName, GERRIT_UPDATE_BASE_URL).toString();
+	const url = new URL(fileName, updateBaseUrl()).toString();
 	const buffer = await got(url, {
-		https: { rejectUnauthorized: rejectUnauthorized() },
+		https: { rejectUnauthorized: false },
 	}).buffer();
 	const vsixPath = path.join(os.tmpdir(), fileName);
 	await fs.writeFile(vsixPath, buffer);
@@ -75,13 +78,12 @@ async function downloadVsix(fileName: string): Promise<string> {
 }
 
 async function promptManualDownload(fileName: string): Promise<void> {
-	const url = new URL(fileName, GERRIT_UPDATE_BASE_URL).toString();
+	const url = new URL(fileName, updateBaseUrl()).toString();
 	const download = 'Download';
-	const choice = await window.showWarningMessage(
+	const message =
 		'A newer Gerrit extension version is available, but ' +
-			'automatic installation failed. Download and install it manually.',
-		download
-	);
+		'automatic installation failed. Download and install it manually.';
+	const choice = await window.showWarningMessage(message, download);
 	if (choice === download) {
 		await env.openExternal(Uri.parse(url));
 	}
@@ -122,8 +124,8 @@ export async function checkForUpdates(
 	}
 
 	try {
-		const html = await got(GERRIT_UPDATE_BASE_URL, {
-			https: { rejectUnauthorized: rejectUnauthorized() },
+		const html = await got(updateBaseUrl(), {
+			https: { rejectUnauthorized: false },
 		}).text();
 
 		const latest = pickLatest(parseCandidates(html));
