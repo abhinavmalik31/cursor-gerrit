@@ -115,14 +115,20 @@ async function installAndReload(latest: VsixCandidate): Promise<void> {
 	}
 }
 
+async function promptUpdateAvailable(latest: VsixCandidate): Promise<void> {
+	const update = 'Update now';
+	const message =
+		`A newer Gerrit extension version (v${latest.version}) is ` +
+		'available. Install it now?';
+	const choice = await window.showInformationMessage(message, update);
+	if (choice === update) {
+		await installAndReload(latest);
+	}
+}
+
 export async function checkForUpdates(
 	context: ExtensionContext
 ): Promise<void> {
-	if (!autoUpdateEnabled()) {
-		log('Self-update: disabled via gerrit.autoUpdate.enabled');
-		return;
-	}
-
 	try {
 		const html = await got(updateBaseUrl(), {
 			https: { rejectUnauthorized: false },
@@ -142,11 +148,19 @@ export async function checkForUpdates(
 			return;
 		}
 
-		log(
-			`Self-update: newer version v${latest.version} available ` +
-				`(current v${current}), installing`
-		);
-		await installAndReload(latest);
+		if (autoUpdateEnabled()) {
+			log(
+				`Self-update: newer version v${latest.version} available ` +
+					`(current v${current}), installing`
+			);
+			await installAndReload(latest);
+		} else {
+			log(
+				`Self-update: newer version v${latest.version} available ` +
+					`(current v${current}), prompting (auto-update off)`
+			);
+			await promptUpdateAvailable(latest);
+		}
 	} catch (e) {
 		log(`Self-update check failed: ${(e as Error).toString()}`);
 	}
