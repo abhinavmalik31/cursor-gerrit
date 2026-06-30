@@ -1,7 +1,7 @@
-import { workspace } from 'vscode';
 import { log } from '../util/log';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 
 interface McpConfig {
 	mcpServers: Record<
@@ -16,6 +16,13 @@ interface McpConfig {
 
 const MCP_SERVER_NAME = 'gerrit-review';
 
+/**
+ * Path to Cursor's global MCP config (`~/.cursor/mcp.json`). 
+ */
+function getGlobalMcpConfigPath(): string {
+	return path.join(os.homedir(), '.cursor', 'mcp.json');
+}
+
 export interface GerritCredentials {
 	url: string;
 	username: string;
@@ -28,14 +35,8 @@ export async function writeMcpConfig(
 	extensionPath: string,
 	credentials: GerritCredentials
 ): Promise<boolean> {
-	const workspaceFolder = workspace.workspaceFolders?.[0]?.uri.fsPath;
-	if (!workspaceFolder) {
-		log('No workspace folder found for MCP config');
-		return false;
-	}
-
-	const mcpDir = path.join(workspaceFolder, '.cursor');
-	const mcpConfigPath = path.join(mcpDir, 'mcp.json');
+	const mcpConfigPath = getGlobalMcpConfigPath();
+	const mcpDir = path.dirname(mcpConfigPath);
 
 	let config: McpConfig = { mcpServers: {} };
 	try {
@@ -94,12 +95,7 @@ export async function writeMcpConfig(
 }
 
 export function removeMcpConfig(): void {
-	const workspaceFolder = workspace.workspaceFolders?.[0]?.uri.fsPath;
-	if (!workspaceFolder) {
-		return;
-	}
-
-	const mcpConfigPath = path.join(workspaceFolder, '.cursor', 'mcp.json');
+	const mcpConfigPath = getGlobalMcpConfigPath();
 	try {
 		if (!fs.existsSync(mcpConfigPath)) {
 			return;
@@ -121,12 +117,7 @@ export function removeMcpConfig(): void {
 }
 
 export function isMcpConfigured(): boolean {
-	const workspaceFolder = workspace.workspaceFolders?.[0]?.uri.fsPath;
-	if (!workspaceFolder) {
-		return false;
-	}
-
-	const mcpConfigPath = path.join(workspaceFolder, '.cursor', 'mcp.json');
+	const mcpConfigPath = getGlobalMcpConfigPath();
 	try {
 		if (!fs.existsSync(mcpConfigPath)) {
 			return false;
