@@ -6,15 +6,16 @@ import {
 	QuickPickItem,
 	Uri,
 	window,
+	workspace,
 } from 'vscode';
 import {
 	API,
 	GitExtension,
 	Repository,
 } from '../../types/vscode-extension-git';
+import { GitCommit, tryExecAsync } from '../git/gitCLI';
 import { getConfiguration } from '../vscode/config';
 import { isGerritCommit } from '../git/commit';
-import { GitCommit } from '../git/gitCLI';
 import { wait } from '../util/util';
 import { log } from '../util/log';
 
@@ -47,11 +48,50 @@ async function tryGetGitAPI(): Promise<false | API> {
 	return false;
 }
 
+/**
+ * Make sure the repository containing each workspace folder is opened in the
+ * git API. When a nested subfolder is opened (e.g. ".../new-view/aiops"), the
+ * actual git root lives in a parent folder, which VSCode only opens depending
+ * on the "git.openRepositoryInParentFolders" setting. We resolve the real
+ * toplevel ourselves and open it so the extension does not silently disable.
+ */
+async function ensureWorkspaceReposOpened(gitAPI: API): Promise<void> {
+	for (const folder of workspace.workspaceFolders ?? []) {
+		if (folder.uri.scheme !== 'file') {
+			continue;
+		}
+
+		const { success, stdout } = await tryExecAsync(
+			'git rev-parse --show-toplevel',
+			{ cwd: folder.uri.fsPath }
+		);
+		const toplevel = stdout.trim();
+		if (!success || !toplevel) {
+			continue;
+		}
+
+		if (
+			gitAPI.repositories.some(
+				(repo) => repo.rootUri.fsPath === toplevel
+			)
+		) {
+			continue;
+		}
+
+		try {
+			await gitAPI.openRepository(Uri.file(toplevel));
+		} catch (e) {
+			log(`Failed to open repository at ${toplevel}: ${e}`);
+		}
+	}
+}
+
 async function getGerritRepos(silent: boolean = true): Promise<Repository[]> {
 	const gitAPI = await tryGetGitAPI();
 	if (!gitAPI) {
 		return [];
 	}
+	await ensureWorkspaceReposOpened(gitAPI);
 	const gerritRepos: Repository[] = [];
 	for (const repo of gitAPI.repositories) {
 		try {
