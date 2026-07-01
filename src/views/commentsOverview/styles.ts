@@ -104,21 +104,14 @@ h2 {
 	opacity: 0.6;
 }
 .comment-row.older-patchset {
-	cursor: default;
-	opacity: 0.6;
+	opacity: 0.7;
 }
 .comment-row.older-patchset:hover {
-	background: inherit;
+	opacity: 1;
 }
 .badge.older-ps {
 	background: var(--vscode-descriptionForeground);
 	color: var(--vscode-editor-background);
-}
-.older-patchset-note {
-	font-size: 11px;
-	opacity: 0.7;
-	padding: 4px 10px 8px;
-	font-style: italic;
 }
 .older-patchset-section {
 	border-left: 3px solid var(--vscode-editorWarning-foreground);
