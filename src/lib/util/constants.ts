@@ -3,7 +3,7 @@ export const EXTENSION_ID = 'sanderronde.vscode--gerrit';
 
 // Self-update: directory that serves versioned cursor--gerrit-<version>.vsix files
 export const GERRIT_UPDATE_BASE_URL =
-	'https://albin-saju.r8.ubvm.nutanix.com/filer/cursor-gerrit/';
+	'http://uranus.corp.nutanix.com/~albin.saju/';
 
 // Refreshing
 export const PERIODICAL_GIT_FETCH_INTERVAL = 5000;
