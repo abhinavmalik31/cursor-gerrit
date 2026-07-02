@@ -1615,6 +1615,18 @@
 					"description": "Note: before you use this, ask your server maintainer to fix their certs. This option can can be dangerous.",
 					"default": false
 				},
+				"gerrit.autoUpdate.enabled": {
+					"type": "boolean",
+					"title": "Automatically update the Gerrit extension",
+					"description": "Check the internal update server on startup and install a newer extension version automatically when one is available.",
+					"default": false
+				},
+				"gerrit.autoUpdate.url": {
+					"type": "string",
+					"title": "Override the Gerrit extension update server URL",
+					"description": "For development/testing. When set, overrides the built-in update server base URL.",
+					"default": ""
+				},
 				"gerrit.customAuthUrlPrefix": {
 					"type": "string",
 					"title": "Add a custom prefix to use for authenticated links",

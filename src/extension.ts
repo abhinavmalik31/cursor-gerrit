@@ -36,6 +36,7 @@ import { GerritUser } from './lib/gerrit/gerritAPI/gerritUser';
 import { updateUploaderState } from './lib/state/uploader';
 import { GerritCodicons, commands } from './commands/defs';
 import { GerritSecrets } from './lib/credentials/secrets';
+import { checkForUpdates } from './lib/vscode/selfUpdate';
 import { registerCommands } from './commands/commands';
 import { setupChangeIDCache } from './lib/git/commit';
 import { createOutputChannel } from './lib/util/log';
@@ -236,6 +237,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
 			version.isGreaterThanOrEqual(new VersionNumber(3, 5, 0))
 		);
 	}
+
+	// Check for a newer extension version on the internal update server
+	void checkForUpdates(context);
 }
 
 export function deactivate(): void {}

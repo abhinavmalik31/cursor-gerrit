@@ -1258,6 +1258,24 @@ export const config = {
 			default: false,
 		},
 	},
+	'gerrit.autoUpdate.enabled': {
+		jsonDefinition: {
+			type: 'boolean',
+			title: 'Automatically update the Gerrit extension',
+			description:
+				'Check the internal update server on startup and install a newer extension version automatically when one is available.',
+			default: false,
+		},
+	},
+	'gerrit.autoUpdate.url': {
+		jsonDefinition: {
+			type: 'string',
+			title: 'Override the Gerrit extension update server URL',
+			description:
+				'For development/testing. When set, overrides the built-in update server base URL.',
+			default: '',
+		},
+	},
 	'gerrit.customAuthUrlPrefix': {
 		jsonDefinition: {
 			type: 'string',
