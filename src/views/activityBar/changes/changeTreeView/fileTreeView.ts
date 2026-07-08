@@ -107,7 +107,8 @@ export class FileTreeView implements TreeItemWithoutChildren {
 	public static async createDiffCommand(
 		gerritRepo: Repository,
 		file: GerritFile,
-		patchsetBase: PatchsetDescription | null
+		patchsetBase: PatchsetDescription | null,
+		forceVirtualNew: boolean = false
 	): Promise<Command | null> {
 		const contents = await this.getFileDiffContent(file, patchsetBase);
 		if (!contents) {
@@ -129,7 +130,8 @@ export class FileTreeView implements TreeItemWithoutChildren {
 			`DIFF-${key}`
 		);
 		const newURI = ternaryWithFallback(
-			patchsetBase === null &&
+			!forceVirtualNew &&
+				patchsetBase === null &&
 				(await file.isLocalFile(gerritRepo, newContent)),
 			Uri.joinPath(gerritRepo.rootUri, file.filePath),
 			newContent.toVirtualFile(

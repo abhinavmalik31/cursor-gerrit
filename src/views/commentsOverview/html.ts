@@ -18,7 +18,7 @@ export interface FileGroup {
 	comments: OverviewComment[];
 }
 
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
 	return text
 		.replace(/&/g, '&amp;')
 		.replace(/</g, '&lt;')
@@ -53,8 +53,9 @@ function renderFileGroup(
 			// Older-patchset rows keep the
 			// `older-patchset` class for visual
 			// distinction but are now clickable
-			// too -- navigation follows renames
-			// and warns on deletes.
+			// too -- they open the file at the
+			// patchset the comment was left on,
+			// where its path and line are exact.
 			const rowClass = isOlderPatchset
 				? 'comment-row older-patchset'
 				: 'comment-row';
@@ -141,9 +142,9 @@ export function buildHTML(
   </div>
   <div class="older-patchset-note">
     These comments are from an older patchset.
-    Clicking opens the file in the current
-    revision; if it was renamed or deleted
-    you'll see a notice.
+    Clicking opens the file at the patchset the
+    comment was left on, where its path and line
+    are exact.
   </div>
   ${olderPatchsetGroups.map((g) => renderFileGroup(g, true, true)).join('')}
 </div>`

@@ -6,6 +6,12 @@ import {
 	commands as vscodeCommands,
 	WebviewPanel,
 	CommentThreadCollapsibleState,
+	Range,
+	Position,
+	Selection,
+	TextEditor,
+	TextEditorRevealType,
+	Disposable,
 } from 'vscode';
 import {
 	acceptMultipleSuggestions,
@@ -16,14 +22,16 @@ import {
 	GerritDraftComment,
 } from '../../lib/gerrit/gerritAPI/gerritComment';
 import {
+	CommentManager,
+	DocumentCommentManager,
+} from '../../providers/commentProvider';
+import {
 	GerritChange,
 	CommentMap,
 } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { FileTreeView } from '../activityBar/changes/changeTreeView/fileTreeView';
-import { GerritRevisionFileStatus } from '../../lib/gerrit/gerritAPI/types';
 import { GerritFile } from '../../lib/gerrit/gerritAPI/gerritFile';
 import { getAPIForSubscription } from '../../lib/gerrit/gerritAPI';
-import { CommentManager } from '../../providers/commentProvider';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
 import { buildHTML, OverviewComment, FileGroup } from './html';
 import { Repository } from '../../types/vscode-extension-git';
@@ -35,6 +43,37 @@ let activeGerritRepo: Repository | null = null;
 let activeChange: GerritChange | null = null;
 let activePatchSetNumber: number = 0;
 let activeExtensionPath: string = '';
+let navigationInProgress = false;
+
+// Wait for provideCommentingRanges to create the comment manager after
+// the diff opens: poll at this interval for this many attempts.
+const MANAGER_POLL_INTERVAL_MS = 50;
+const MANAGER_POLL_ATTEMPTS = 30;
+// After expanding the thread, wait for the editor's visible range to go
+// quiet for this long (no scroll events) before centering once. Capped
+// so an editor that never settles still gets centered.
+const VIEW_SETTLE_QUIET_MS = 120;
+const VIEW_SETTLE_MAX_MS = 1500;
+
+// State for the single pending "reveal after settle" pass, replaced on
+// every navigation so two navigations can't fight over the scroll
+// position of the same pane.
+let activeRevealWatcher: Disposable | null = null;
+let revealQuietTimer: ReturnType<typeof setTimeout> | null = null;
+let revealCapTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingReveal(): void {
+	activeRevealWatcher?.dispose();
+	activeRevealWatcher = null;
+	if (revealQuietTimer) {
+		clearTimeout(revealQuietTimer);
+		revealQuietTimer = null;
+	}
+	if (revealCapTimer) {
+		clearTimeout(revealCapTimer);
+		revealCapTimer = null;
+	}
+}
 
 export function setExtensionPath(path: string): void {
 	activeExtensionPath = path;
@@ -425,66 +464,258 @@ function groupComments(
 }
 
 /**
- * Decide which path in the current revision a
- * comment's file maps to, when the comment was
- * left on an older patchset and the file may
- * have been renamed or deleted since.
+ * Resolve the GerritFile for a comment left on an
+ * older patchset, loaded at that patchset's revision
+ * so the original line numbers stay valid.
  *
- * - 'present': same path exists in current rev,
- *   open it as today.
- * - 'renamed': another file in the current rev
- *   has oldPath === commentPath, open the new
- *   path with an info toast.
- * - 'deleted': file is marked DELETED in current
- *   rev, warn and skip.
- * - 'unknown': not present and no rename target
- *   found, fall back to existing best-effort.
+ * When the path isn't in the patchset's changed-files
+ * list, a GerritFile bound to that revision is
+ * synthesized (its content still exists at the older
+ * commit). Returns null only when the older commit
+ * itself cannot be identified.
  */
-function resolveCurrentRevisionPath(
-	commentPath: string,
-	files: Record<string, GerritFile> | null | undefined
-):
-	| { kind: 'present' | 'unknown'; path: string }
-	| { kind: 'renamed'; path: string; oldPath: string }
-	| { kind: 'deleted'; path: string } {
-	if (!files) {
-		return {
-			kind: 'unknown',
-			path: commentPath,
-		};
+async function resolveOlderPatchsetFile(
+	change: GerritChange,
+	filePath: string,
+	patchSet: number
+): Promise<GerritFile | null> {
+	const revisions = await change.revisions();
+	if (!revisions) {
+		return null;
 	}
 
-	const direct = files[commentPath];
+	const olderRevision = Object.values(revisions).find(
+		(r) => r.number === patchSet
+	);
+	if (!olderRevision) {
+		return null;
+	}
+
+	const direct = olderRevision._files?.[filePath];
 	if (direct) {
-		if (direct.status === GerritRevisionFileStatus.DELETED) {
-			return {
-				kind: 'deleted',
-				path: commentPath,
-			};
-		}
-		return {
-			kind: 'present',
-			path: commentPath,
-		};
+		return direct;
 	}
 
-	for (const f of Object.values(files)) {
-		if (
-			f.status === GerritRevisionFileStatus.RENAMED &&
-			f.oldPath === commentPath
-		) {
-			return {
-				kind: 'renamed',
-				path: f.filePath,
-				oldPath: commentPath,
-			};
+	try {
+		const filesSub = await olderRevision.files(null);
+		const files = await filesSub.getValue();
+		const fetched = files?.[filePath];
+		if (fetched) {
+			return fetched;
 		}
+	} catch (e) {
+		// Not fatal: the file is likely just unchanged in this
+		// patchset, so we synthesize a revision-bound file below.
+		log(
+			'resolveOlderPatchsetFile: files() failed for ' +
+				`${filePath}@${patchSet}, synthesizing: ${String(e)}`
+		);
 	}
 
-	return {
-		kind: 'unknown',
-		path: commentPath,
+	// Gerrit's file list only includes files changed in this patchset,
+	// but the path's content still exists at the older commit. Bind a
+	// synthetic GerritFile to that revision so getContent() loads the
+	// older commit's version by path@commit.
+	return new GerritFile(
+		change.changeID,
+		change.project,
+		{
+			id: olderRevision.revisionID,
+			number: olderRevision.number,
+		},
+		filePath,
+		{
+			lines_inserted: 0,
+			lines_deleted: 0,
+			size_delta: 0,
+			size: 0,
+			old_path: undefined,
+		}
+	);
+}
+
+type GerritRevision = NonNullable<
+	Awaited<ReturnType<GerritChange['getCurrentRevision']>>
+>;
+
+interface NavigationTarget {
+	readonly file: GerritFile;
+	// The comment thread widget renders at the END of a range comment
+	// (the comment's `line`), so this is the line to reveal.
+	readonly lineToJump: number | undefined;
+}
+
+// Resolve which GerritFile to open and which line to reveal. Older
+// patchset comments open at the patchset they were left on, where the
+// path always exists and the original line numbers stay valid, so later
+// renames/deletes are irrelevant. Returns null only when the older
+// commit cannot be identified.
+async function resolveNavigationTarget(
+	change: GerritChange,
+	currentRevision: GerritRevision,
+	filePath: string,
+	line: number | undefined,
+	patchSet: number | undefined
+): Promise<NavigationTarget | null> {
+	const isOlderPatchset =
+		typeof patchSet === 'number' &&
+		activePatchSetNumber > 0 &&
+		patchSet !== activePatchSetNumber;
+
+	if (isOlderPatchset && typeof patchSet === 'number') {
+		const olderFile = await resolveOlderPatchsetFile(
+			change,
+			filePath,
+			patchSet
+		);
+		if (!olderFile) {
+			void window.showWarningMessage(
+				`Cannot navigate to comment: patchset ${patchSet} of "${filePath}" could not be loaded.`
+			);
+			return null;
+		}
+		return { file: olderFile, lineToJump: line };
+	}
+
+	const file =
+		currentRevision._files?.[filePath] ??
+		new GerritFile(
+			change.changeID,
+			change.project,
+			{
+				id: currentRevision.revisionID,
+				number: currentRevision.number,
+			},
+			filePath,
+			{
+				lines_inserted: 0,
+				lines_deleted: 0,
+				size_delta: 0,
+				size: 0,
+				old_path: undefined,
+			}
+		);
+
+	return { file, lineToJump: line };
+}
+
+// Wait for provideCommentingRanges to create a DocumentCommentManager
+// for one of the diff URIs, then load comments only if its threads
+// aren't already populated. Reloading disposes and recreates every
+// thread widget, causing the target comment to flicker.
+async function ensureCommentsLoaded(
+	leftUri: Uri,
+	rightUri: Uri
+): Promise<void> {
+	const findMgr = (): DocumentCommentManager | null =>
+		CommentManager.getFileManagerForUri(rightUri) ??
+		CommentManager.getFileManagerForUri(leftUri);
+
+	let loadedMgr = findMgr();
+	for (let i = 0; !loadedMgr && i < MANAGER_POLL_ATTEMPTS; i++) {
+		await new Promise((r) => setTimeout(r, MANAGER_POLL_INTERVAL_MS));
+		loadedMgr = findMgr();
+	}
+
+	if (loadedMgr && loadedMgr.createdThreads.size === 0) {
+		await loadedMgr.loadComments();
+	}
+}
+
+// Expand the comment thread(s) covering the target line so the widget
+// reserves its layout space up front, and return the URI of the diff
+// pane that hosts the matched thread (falling back to the right pane).
+function expandTargetThreads(
+	changeID: string,
+	leftUri: Uri,
+	rightUri: Uri,
+	target0: number
+): string {
+	let hostUri: string | null = null;
+
+	const expandAtLine = (mgr: DocumentCommentManager | null): void => {
+		if (!mgr) {
+			return;
+		}
+		for (const t of mgr.createdThreads) {
+			if (t.range.start.line <= target0 && target0 <= t.range.end.line) {
+				t.collapsibleState = CommentThreadCollapsibleState.Expanded;
+				const tUri = t.uri.toString();
+				if (
+					hostUri === null &&
+					(tUri === rightUri.toString() ||
+						tUri === leftUri.toString())
+				) {
+					hostUri = tUri;
+				}
+			}
+		}
 	};
+
+	expandAtLine(CommentManager.getFileManagerForUri(rightUri));
+	expandAtLine(CommentManager.getFileManagerForUri(leftUri));
+	for (const m of CommentManager.getFileManagersForChangeID(changeID)) {
+		expandAtLine(m);
+	}
+
+	return hostUri ?? rightUri.toString();
+}
+
+// Center the comment line in its pane exactly once, after the editor
+// layout has settled. The thread widget is expanded *before* this runs
+// (see expandTargetThreads), so its height is already reserved; we then
+// wait for the visible range to go quiet rather than revealing mid-render
+// and re-correcting afterwards (the old "double scroll"). The cursor is
+// parked on the line up front, which does not scroll on its own.
+function revealCommentWhenSettled(hostUri: string, target0: number): void {
+	const findEditor = (): TextEditor | undefined =>
+		window.visibleTextEditors.find(
+			(e) => e.document.uri.toString() === hostUri
+		);
+
+	const editor = findEditor() ?? window.activeTextEditor;
+	if (!editor) {
+		void vscodeCommands.executeCommand('revealLine', {
+			lineNumber: target0,
+			at: 'center',
+		});
+		return;
+	}
+	const pos = new Position(target0, 0);
+	editor.selection = new Selection(pos, pos);
+
+	// Replace any settle pass still pending from a previous navigation.
+	cancelPendingReveal();
+
+	let done = false;
+	const center = (): void => {
+		if (done) {
+			return;
+		}
+		done = true;
+		cancelPendingReveal();
+		(findEditor() ?? editor).revealRange(
+			new Range(target0, 0, target0, 0),
+			TextEditorRevealType.InCenter
+		);
+	};
+	const scheduleQuiet = (): void => {
+		if (revealQuietTimer) {
+			clearTimeout(revealQuietTimer);
+		}
+		revealQuietTimer = setTimeout(center, VIEW_SETTLE_QUIET_MS);
+	};
+
+	activeRevealWatcher = window.onDidChangeTextEditorVisibleRanges((e) => {
+		if (e.textEditor.document.uri.toString() === hostUri) {
+			scheduleQuiet();
+		}
+	});
+	// Kick off the quiet window in case expanding caused no scroll (the
+	// widget rendered off-screen), and hard-cap so a never-quiet editor
+	// still gets centered once.
+	scheduleQuiet();
+	revealCapTimer = setTimeout(center, VIEW_SETTLE_MAX_MS);
 }
 
 async function navigateToComment(
@@ -496,6 +727,13 @@ async function navigateToComment(
 	if (filePath === '/PATCHSET_LEVEL') {
 		return;
 	}
+
+	// Guard against duplicate dispatches opening multiple diffs into
+	// the same preview tab, which races/disposes the rendered thread.
+	if (navigationInProgress) {
+		return;
+	}
+	navigationInProgress = true;
 
 	try {
 		const change = activeChange;
@@ -510,71 +748,30 @@ async function navigateToComment(
 			return;
 		}
 
-		const isOlderPatchset =
-			typeof patchSet === 'number' &&
-			activePatchSetNumber > 0 &&
-			patchSet !== activePatchSetNumber;
-
-		// For older-patchset comments, follow
-		// renames and skip deletes so the user
-		// always lands on something useful.
-		let targetPath = filePath;
-		if (isOlderPatchset) {
-			const resolved = resolveCurrentRevisionPath(
-				filePath,
-				currentRevision._files
-			);
-			if (resolved.kind === 'deleted') {
-				void window.showWarningMessage(
-					`File "${filePath}" was deleted` +
-						` after patchset ${patchSet}` +
-						` (current: ${activePatchSetNumber}).` +
-						' No diff to open.'
-				);
-				return;
-			}
-			if (resolved.kind === 'renamed') {
-				void window.showInformationMessage(
-					`File "${filePath}" was renamed to` +
-						` "${resolved.path}" after` +
-						` patchset ${patchSet}.` +
-						' Opening the new path.'
-				);
-				targetPath = resolved.path;
-			}
-			// 'present' and 'unknown' both fall
-			// through with targetPath unchanged
-			// (or set to the renamed new path).
+		const target = await resolveNavigationTarget(
+			change,
+			currentRevision,
+			filePath,
+			line,
+			patchSet
+		);
+		if (!target) {
+			return;
 		}
+		const { file, lineToJump } = target;
 
-		const revDesc = {
-			id: currentRevision.revisionID,
-			number: currentRevision.number,
-		};
-
-		const file =
-			currentRevision._files?.[targetPath] ??
-			new GerritFile(
-				change.changeID,
-				change.project,
-				revDesc,
-				targetPath,
-				{
-					lines_inserted: 0,
-					lines_deleted: 0,
-					size_delta: 0,
-					size: 0,
-					old_path: undefined,
-				}
-			);
-
+		// Force the virtual patchset file on the right side so the
+		// gerrit comment threads render through the FileMeta-backed
+		// manager (like the normal review diff). A local on-disk
+		// right side has no FileMeta and the threads do not surface.
 		const diffCmd = await FileTreeView.createDiffCommand(
 			gerritRepo,
 			file,
-			null
+			null,
+			true
 		);
 		if (!diffCmd?.arguments) {
-			log('navigateToComment: diff command' + ' failed for ' + filePath);
+			log('navigateToComment: diff command failed for ' + filePath);
 			return;
 		}
 
@@ -585,73 +782,26 @@ async function navigateToComment(
 			...(diffCmd.arguments as unknown[])
 		);
 
-		// Immediately navigate to the line so the
-		// user sees the right location while
-		// comments load in the background.
-		if (line) {
+		await ensureCommentsLoaded(leftUri, rightUri);
+
+		if (lineToJump) {
 			await vscodeCommands.executeCommand(
 				'workbench.action.focusActiveEditorGroup'
 			);
-			await vscodeCommands.executeCommand('revealLine', {
-				lineNumber: line - 1,
-				at: 'center',
-			});
-		}
-
-		// Poll until provideCommentingRanges has
-		// fired and a DocumentCommentManager exists
-		// for one of the diff URIs. Use short ticks
-		// since data is cached - the manager should
-		// appear quickly.
-		const findMgr = ():
-			| import('../../providers/commentProvider').DocumentCommentManager
-			| null =>
-			CommentManager.getFileManagerForUri(rightUri) ??
-			CommentManager.getFileManagerForUri(leftUri);
-
-		let loadedMgr = findMgr();
-		if (!loadedMgr) {
-			for (let i = 0; i < 30; i++) {
-				await new Promise((r) => setTimeout(r, 50));
-				loadedMgr = findMgr();
-				if (loadedMgr) {
-					break;
-				}
-			}
-		}
-
-		if (loadedMgr) {
-			await loadedMgr.loadComments();
-		}
-
-		if (line) {
-			const expandAtLine = (
-				mgr:
-					| import('../../providers/commentProvider').DocumentCommentManager
-					| null
-			): void => {
-				if (!mgr) {
-					return;
-				}
-				for (const t of mgr.createdThreads) {
-					if (t.range.start.line === line - 1) {
-						t.collapsibleState =
-							CommentThreadCollapsibleState.Expanded;
-					}
-				}
-			};
-
-			expandAtLine(CommentManager.getFileManagerForUri(rightUri));
-			expandAtLine(CommentManager.getFileManagerForUri(leftUri));
-
-			const managers = CommentManager.getFileManagersForChangeID(
-				change.changeID
+			// Expand the thread first so its height is reserved, then
+			// center the line once the layout settles - a single scroll.
+			const target0 = lineToJump - 1;
+			const hostUri = expandTargetThreads(
+				change.changeID,
+				leftUri,
+				rightUri,
+				target0
 			);
-			for (const m of managers) {
-				expandAtLine(m);
-			}
+			revealCommentWhenSettled(hostUri, target0);
 		}
 	} catch (e) {
 		log('Failed to navigate to comment: ' + String(e));
+	} finally {
+		navigationInProgress = false;
 	}
 }
