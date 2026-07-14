@@ -11,12 +11,38 @@ interface VsixCandidate {
 	readonly version: string;
 	readonly parts: readonly number[];
 	readonly fileName: string;
+	/**
+	 * `<platform>-<arch>` (e.g. `darwin-arm64`), or `undefined` for a legacy
+	 * platform-agnostic file that predates multi-platform packaging.
+	 */
+	readonly platform: string | undefined;
 }
 
-const VSIX_FILE_PATTERN = /cursor--gerrit-(\d+\.\d+\.\d+)\.vsix/g;
+const VSIX_FILE_PATTERN =
+	/cursor--gerrit-(\d+\.\d+\.\d+)(?:-([a-z0-9]+-[a-z0-9]+))?\.vsix/g;
+
+/** The `<platform>-<arch>` VSIX target that matches this running client. */
+function currentTarget(): string {
+	return `${process.platform}-${process.arch}`;
+}
 
 function toParts(version: string): number[] {
 	return version.split('.').map((part) => parseInt(part, 10));
+}
+
+function isSameVersion(a: readonly number[], b: readonly number[]): boolean {
+	return !isNewer(a, b) && !isNewer(b, a);
+}
+
+/**
+ * A candidate is installable if it targets this client's platform, or if it
+ * is a legacy suffix-less build (kept as a fallback for older releases).
+ */
+function isCompatible(candidate: VsixCandidate): boolean {
+	return (
+		candidate.platform === undefined ||
+		candidate.platform === currentTarget()
+	);
 }
 
 function isNewer(remote: readonly number[], local: readonly number[]): boolean {
@@ -52,6 +78,7 @@ function parseCandidates(html: string): VsixCandidate[] {
 			version: match[1],
 			parts: toParts(match[1]),
 			fileName,
+			platform: match[2],
 		});
 	}
 	return candidates;
@@ -60,7 +87,20 @@ function parseCandidates(html: string): VsixCandidate[] {
 function pickLatest(candidates: VsixCandidate[]): VsixCandidate | null {
 	let latest: VsixCandidate | null = null;
 	for (const candidate of candidates) {
+		if (!isCompatible(candidate)) {
+			continue;
+		}
 		if (!latest || isNewer(candidate.parts, latest.parts)) {
+			latest = candidate;
+			continue;
+		}
+		// Same version: prefer a platform-specific build over a legacy
+		// suffix-less one.
+		if (
+			isSameVersion(candidate.parts, latest.parts) &&
+			candidate.platform !== undefined &&
+			latest.platform === undefined
+		) {
 			latest = candidate;
 		}
 	}
