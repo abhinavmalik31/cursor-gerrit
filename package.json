@@ -1733,6 +1733,7 @@
 		"format": "prettier --write src/",
 		"copy": "ts-node -T scripts/copy.ts",
 		"package": "npm run prepack && npm exec vsce package --no-yarn",
+		"package:platforms": "npm run prepack && ts-node -T scripts/package-platforms.ts",
 		"package-dev": "npm run prepush && npm run build:debug && npm exec vsce package --no-yarn",
 		"generate-package": "generate-package-json generate --name Gerrit --input src/commands/defs.ts -w -p package.json --handler src/commands/commands.ts --validate --prefix Gerrit && prettier --write package.json",
 		"test": "TS_NODE_PROJECT=tests/tsconfig.json mocha --require ts-node/register 'tests/**/*.test.ts' --timeout 10000",
