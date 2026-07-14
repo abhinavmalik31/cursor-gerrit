@@ -71,9 +71,7 @@ async function ensureWorkspaceReposOpened(gitAPI: API): Promise<void> {
 		}
 
 		if (
-			gitAPI.repositories.some(
-				(repo) => repo.rootUri.fsPath === toplevel
-			)
+			gitAPI.repositories.some((repo) => repo.rootUri.fsPath === toplevel)
 		) {
 			continue;
 		}

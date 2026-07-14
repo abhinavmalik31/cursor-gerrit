@@ -1,7 +1,7 @@
 import { log } from '../util/log';
 import * as path from 'path';
-import * as fs from 'fs';
 import * as os from 'os';
+import * as fs from 'fs';
 
 interface McpConfig {
 	mcpServers: Record<
@@ -17,7 +17,7 @@ interface McpConfig {
 const MCP_SERVER_NAME = 'gerrit-review';
 
 /**
- * Path to Cursor's global MCP config (`~/.cursor/mcp.json`). 
+ * Path to Cursor's global MCP config (`~/.cursor/mcp.json`).
  */
 function getGlobalMcpConfigPath(): string {
 	return path.join(os.homedir(), '.cursor', 'mcp.json');
