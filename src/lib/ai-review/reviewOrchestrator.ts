@@ -17,6 +17,7 @@ import { writeMcpConfig, GerritCredentials } from '../mcp/mcpManager';
 import { showCommentsOverview } from '../../views/commentsOverview';
 import { GerritChange } from '../gerrit/gerritAPI/gerritChange';
 import { Repository } from '../../types/vscode-extension-git';
+import { RepositoryContext } from '../git/repositoryContext';
 import { runPreflight, PreflightError } from './preflight';
 import { GerritAPIWith } from '../gerrit/gerritAPI/api';
 import { GerritSecrets } from '../credentials/secrets';
@@ -36,7 +37,7 @@ const SEPARATOR = '\u2500'.repeat(60);
 
 export async function runAIReview(
 	changeNumber: string,
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	extensionContext: ExtensionContext,
 	changeTreeView?: ChangeTreeView
 ): Promise<void> {
@@ -50,7 +51,7 @@ export async function runAIReview(
 			try {
 				await doReview(
 					changeNumber,
-					gerritRepo,
+					repositoryContext,
 					extensionContext,
 					progress,
 					token,
@@ -70,7 +71,7 @@ export async function runAIReview(
 
 async function doReview(
 	changeNumber: string,
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	extensionContext: ExtensionContext,
 	progress: {
 		report: (v: { message?: string; increment?: number }) => void;
@@ -81,6 +82,7 @@ async function doReview(
 	},
 	changeTreeView?: ChangeTreeView
 ): Promise<void> {
+	let gerritRepo = repositoryContext.getActiveRepository();
 	progress.report({
 		message: 'Preparing review...',
 		increment: 5,
@@ -98,7 +100,7 @@ async function doReview(
 		});
 
 		if (changeTreeView) {
-			const ok = await quickCheckout(gerritRepo, changeTreeView);
+			const ok = await quickCheckout(repositoryContext, changeTreeView);
 			if (!ok) {
 				throw new Error(
 					'Failed to checkout change ' +
@@ -107,7 +109,27 @@ async function doReview(
 						'output channel for details.'
 				);
 			}
+			gerritRepo = repositoryContext.getActiveRepository();
 		} else {
+			const change = await GerritChange.getChangeOnce(changeNumber);
+			if (!change) {
+				throw new Error(`Could not load Gerrit change ${changeNumber}`);
+			}
+			const resolution = await repositoryContext.resolveWorktreeForBranch(
+				change.branch
+			);
+			if (resolution.kind === 'openFailed') {
+				throw new Error(
+					`Failed to open worktree ${resolution.worktreePath}`
+				);
+			}
+			if (resolution.kind !== 'matched') {
+				throw new Error(
+					'No unique worktree tracks target branch ' +
+						`"${change.branch}"`
+				);
+			}
+			gerritRepo = resolution.repository;
 			const result = await gitFetchAndCheckoutChange(
 				changeNumber,
 				'latest',
@@ -124,6 +146,7 @@ async function doReview(
 							: 'See the Gerrit output channel for details.')
 				);
 			}
+			repositoryContext.setActiveRepository(gerritRepo);
 		}
 	}
 

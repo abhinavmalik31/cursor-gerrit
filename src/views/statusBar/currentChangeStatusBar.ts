@@ -1,14 +1,8 @@
 import {
-	ExtensionContext,
-	window,
-	StatusBarAlignment,
-	StatusBarItem,
-	Disposable,
-} from 'vscode';
-import {
 	DefaultChangeFilter,
 	filterOr,
 } from '../../lib/gerrit/gerritAPI/filters';
+import { window, StatusBarAlignment, StatusBarItem, Disposable } from 'vscode';
 import { gitCheckoutRemote, onChangeLastCommit } from '../../lib/git/git';
 
 import { GerritChange } from '../../lib/gerrit/gerritAPI/gerritChange';
@@ -245,17 +239,14 @@ async function gitCheckoutBranch(
 
 export async function showCurrentChangeStatusBarIcon(
 	gerritRepo: Repository,
-	currentChangeStatusBar: CurrentChangeStatusBarManager,
-	context: ExtensionContext
-): Promise<void> {
-	context.subscriptions.push(
-		await onChangeLastCommit(
-			gerritRepo,
-			async (lastCommit) => {
-				await currentChangeStatusBar.onCommitUpdate(lastCommit);
-			},
-			true
-		)
+	currentChangeStatusBar: CurrentChangeStatusBarManager
+): Promise<Disposable> {
+	return await onChangeLastCommit(
+		gerritRepo,
+		async (lastCommit) => {
+			await currentChangeStatusBar.onCommitUpdate(lastCommit);
+		},
+		true
 	);
 }
 

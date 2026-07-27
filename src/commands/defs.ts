@@ -927,13 +927,6 @@ export const config = {
 			description: 'When inline comments should be expanded',
 		},
 	},
-	'gerrit.gitRepo': {
-		jsonDefinition: {
-			type: 'string',
-			description:
-				'Git repository to use (only needed for multi-git-repo setups)',
-		},
-	},
 	'gerrit.changeTitleTemplate': {
 		jsonDefinition: {
 			type: 'object',

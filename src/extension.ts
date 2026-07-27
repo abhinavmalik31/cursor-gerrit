@@ -23,23 +23,24 @@ import { CommentManager, DocumentManager } from './providers/commentProvider';
 import { getOrCreateReviewWebviewProvider } from './views/activityBar/review';
 import { getOrCreateChangesTreeProvider } from './views/activityBar/changes';
 import { FileProvider, GERRIT_FILE_SCHEME } from './providers/fileProvider';
-import { getConfiguration, initConfigListener } from './lib/vscode/config';
 import { setContextProp, setDefaultContexts } from './lib/vscode/context';
 import { createAutoRegisterCommand } from 'vscode-generate-package-json';
 import { getOrCreateModelTreeProvider } from './views/activityBar/model';
+import { getRepositoryContext, pickGitRepo } from './lib/gerrit/gerrit';
+import { bindToActiveRepository } from './lib/git/repositoryContext';
 import { getAPI, setAPIGitReviewFile } from './lib/gerrit/gerritAPI';
 import { GerritExtensionCommands } from './commands/command-names';
 import { AiThreadManager } from './lib/ai-review/aiThreadManager';
 import { GERRIT_SEARCH_RESULTS_VIEW } from './lib/util/constants';
-import { getGerritRepo, pickGitRepo } from './lib/gerrit/gerrit';
 import { GerritUser } from './lib/gerrit/gerritAPI/gerritUser';
 import { updateUploaderState } from './lib/state/uploader';
 import { GerritCodicons, commands } from './commands/defs';
 import { GerritSecrets } from './lib/credentials/secrets';
 import { checkForUpdates } from './lib/vscode/selfUpdate';
+import { createOutputChannel, log } from './lib/util/log';
+import { getConfiguration } from './lib/vscode/config';
 import { registerCommands } from './commands/commands';
 import { setupChangeIDCache } from './lib/git/commit';
-import { createOutputChannel } from './lib/util/log';
 import { URIHandler } from './providers/uriHandler';
 import { storageInit } from './lib/vscode/storage';
 import { VersionNumber } from './lib/util/version';
@@ -63,16 +64,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
 		registerCommand(GerritExtensionCommands.CHANGE_GIT_REPO, pickGitRepo)
 	);
 
-	// Add config listener
-	initConfigListener();
-
 	// Check if we're even using gerrit
-	const gerritRepo = await getGerritRepo(context);
-
-	if (!gerritRepo) {
+	const repositoryContext = await getRepositoryContext();
+	if (!repositoryContext) {
 		await setContextProp('gerrit:noGerritRepo', true);
 		return;
 	}
+	context.subscriptions.push(repositoryContext);
+	const gerritRepo = repositoryContext.controlRepository;
+	log(`Using Gerrit repository: ${gerritRepo.rootUri.fsPath}`);
 	await setContextProp('gerrit:isUsingGerrit', true);
 
 	GerritSecrets.secretStorage = context.secrets;
@@ -110,7 +110,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	// Register commands
 	const statusBar = new CurrentChangeStatusBarManager();
 	context.subscriptions.push(statusBar);
-	registerCommands(statusBar, gerritRepo, context);
+	registerCommands(statusBar, repositoryContext, context);
 
 	const version = await (await getAPI(true))?.getGerritVersion();
 	if (version?.isSmallerThan(new VersionNumber(3, 4, 0))) {
@@ -141,7 +141,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	}
 
 	// Register status bar entry
-	await showCurrentChangeStatusBarIcon(gerritRepo, statusBar, context);
+	context.subscriptions.push(
+		await bindToActiveRepository(repositoryContext, async (repository) =>
+			showCurrentChangeStatusBarIcon(repository, statusBar)
+		)
+	);
 	await showQuickCheckoutStatusBarIcons(context);
 
 	// Test stream events
@@ -157,13 +161,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	})();
 
 	// Register tree views
-	context.subscriptions.push(getOrCreateChangesTreeProvider(gerritRepo));
+	context.subscriptions.push(
+		getOrCreateChangesTreeProvider(repositoryContext)
+	);
 	context.subscriptions.push(getOrCreateQuickCheckoutTreeProvider());
 	context.subscriptions.push(getOrCreateModelTreeProvider());
 	context.subscriptions.push(
 		window.registerWebviewViewProvider(
 			'gerrit:review',
-			await getOrCreateReviewWebviewProvider(gerritRepo, context),
+			await getOrCreateReviewWebviewProvider(repositoryContext, context),
 			{
 				webviewOptions: {
 					retainContextWhenHidden: true,
@@ -174,13 +180,18 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	context.subscriptions.push(
 		(() => {
 			const searchResultsTreeProvider = new SearchResultsTreeProvider(
-				gerritRepo
+				repositoryContext
 			);
 			const treeView = window.createTreeView(GERRIT_SEARCH_RESULTS_VIEW, {
 				treeDataProvider: searchResultsTreeProvider,
 				showCollapseAll: true,
 			});
 			searchResultsTreeProvider.treeView = treeView;
+			context.subscriptions.push(
+				repositoryContext.onDidChangeActiveRepository(() => {
+					void searchResultsTreeProvider.refresh();
+				})
+			);
 			return treeView;
 		})()
 	);
@@ -194,7 +205,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	);
 
 	// Create comment controller
-	context.subscriptions.push(CommentManager.init(gerritRepo));
+	context.subscriptions.push(CommentManager.init(repositoryContext));
 
 	// Create document manager
 	context.subscriptions.push(DocumentManager.init());
@@ -219,12 +230,16 @@ export async function activate(context: ExtensionContext): Promise<void> {
 	);
 
 	context.subscriptions.push(
-		window.registerUriHandler(new URIHandler(gerritRepo))
+		window.registerUriHandler(new URIHandler(repositoryContext))
 	);
 
 	// Add disposables
-	context.subscriptions.push(await setupChangeIDCache(gerritRepo));
-	context.subscriptions.push(await updateUploaderState(gerritRepo));
+	context.subscriptions.push(
+		await bindToActiveRepository(repositoryContext, setupChangeIDCache)
+	);
+	context.subscriptions.push(
+		await bindToActiveRepository(repositoryContext, updateUploaderState)
+	);
 	context.subscriptions.push(fileCache);
 
 	// Warm up cache for self

@@ -1274,10 +1274,6 @@
 					"default": "unresolved",
 					"description": "When inline comments should be expanded"
 				},
-				"gerrit.gitRepo": {
-					"type": "string",
-					"description": "Git repository to use (only needed for multi-git-repo setups)"
-				},
 				"gerrit.changeTitleTemplate": {
 					"type": "object",
 					"description": "Templates for showing the titles of changes in the CHANGES view. Use ${number}, ${subject/title}, ${owner}, ${repo}, ${branch}, ${status} as templates.",

@@ -9,12 +9,19 @@ import {
 } from 'vscode';
 import { FileTreeView } from '../views/activityBar/changes/changeTreeView/fileTreeView';
 import { GerritChange } from '../lib/gerrit/gerritAPI/gerritChange';
+import { RepositoryContext } from '../lib/git/repositoryContext';
 import { Repository } from '../types/vscode-extension-git';
 import { gitCheckoutRemote } from '../lib/git/git';
 import { tryExecAsync } from '../lib/git/gitCLI';
 
 export class URIHandler implements UriHandler {
-	public constructor(private readonly _gerritRepo: Repository) {}
+	public constructor(
+		private readonly _repositoryContext: RepositoryContext
+	) {}
+
+	private get _gerritRepo(): Repository {
+		return this._repositoryContext.getActiveRepository();
+	}
 
 	private async _handleChangeCheckout(query: {
 		checkout?: string;

@@ -11,20 +11,24 @@ import {
 	GERRIT_CHANGE_EXPLORER_VIEW,
 	PERIODICAL_CHANGE_FETCH_INTERVAL,
 } from '../../lib/util/constants';
+import {
+	bindToActiveRepository,
+	RepositoryContext,
+} from '../../lib/git/repositoryContext';
 import { FileTreeView } from './changes/changeTreeView/fileTreeView';
-import { Repository } from '../../types/vscode-extension-git';
 import { RootTreeViewProvider } from './changes/rootTreeView';
 import { ChangeTreeView } from './changes/changeTreeView';
 import { onChangeLastCommit } from '../../lib/git/git';
 import { TreeViewItem } from './shared/treeTypes';
 import { ViewPanel } from './changes/viewPanel';
+import * as path from 'path';
 
 export class ChangesTreeProvider
 	implements TreeDataProvider<TreeViewItem>, Disposable
 {
 	private static _instances: Set<ChangesTreeProvider> = new Set();
 	private _disposables: Disposable[] = [];
-	public rootViewProvider = new RootTreeViewProvider(this._gerritRepo, this);
+	public rootViewProvider: RootTreeViewProvider;
 
 	public onDidChangeTreeDataEmitter: EventEmitter<
 		TreeViewItem | undefined | null | void
@@ -33,8 +37,12 @@ export class ChangesTreeProvider
 		TreeViewItem | undefined | null | void
 	> = this.onDidChangeTreeDataEmitter.event;
 
-	public constructor(private readonly _gerritRepo: Repository) {
+	public constructor(repositoryContext: RepositoryContext) {
 		ChangesTreeProvider._instances.add(this);
+		this.rootViewProvider = new RootTreeViewProvider(
+			repositoryContext,
+			this
+		);
 		this._disposables.push(FileTreeView.init());
 		const interval = setTimeout(() => {
 			this.refresh();
@@ -42,17 +50,15 @@ export class ChangesTreeProvider
 		this._disposables.push({
 			dispose: () => clearInterval(interval),
 		});
-		void (async () => {
-			this._disposables.push(
-				await onChangeLastCommit(
-					_gerritRepo,
-					() => {
-						this.refresh();
-					},
-					false
-				)
-			);
-		})();
+		void bindToActiveRepository(repositoryContext, async (repository) =>
+			onChangeLastCommit(
+				repository,
+				() => {
+					this.refresh();
+				},
+				false
+			)
+		).then((disposable) => this._disposables.push(disposable));
 	}
 
 	public static refesh(): void {
@@ -102,18 +108,27 @@ export class ChangesTreeProvider
 
 let changesTreeProvider: TreeView<TreeViewItem> | null = null;
 export function getOrCreateChangesTreeProvider(
-	gerritRepo: Repository
+	repositoryContext: RepositoryContext
 ): TreeView<TreeViewItem> {
 	if (changesTreeProvider) {
 		return changesTreeProvider;
 	}
-	return (changesTreeProvider = window.createTreeView(
-		GERRIT_CHANGE_EXPLORER_VIEW,
-		{
-			treeDataProvider: new ChangesTreeProvider(gerritRepo),
-			showCollapseAll: true,
+	changesTreeProvider = window.createTreeView(GERRIT_CHANGE_EXPLORER_VIEW, {
+		treeDataProvider: new ChangesTreeProvider(repositoryContext),
+		showCollapseAll: true,
+	});
+	changesTreeProvider.description = path.basename(
+		repositoryContext.getActiveRepository().rootUri.fsPath
+	);
+	repositoryContext.onDidChangeActiveRepository((repository) => {
+		if (changesTreeProvider) {
+			changesTreeProvider.description = path.basename(
+				repository.rootUri.fsPath
+			);
+			ChangesTreeProvider.refesh();
 		}
-	));
+	});
+	return changesTreeProvider;
 }
 
 export function getChangesTreeProvider(): TreeView<TreeViewItem> | null {

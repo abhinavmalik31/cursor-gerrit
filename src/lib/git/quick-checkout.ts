@@ -24,8 +24,9 @@ import { QuickCheckoutTreeEntry } from '../../views/activityBar/quickCheckout';
 import { storageGet, StorageScope, storageSet } from '../vscode/storage';
 import { generateRandomString, uniqueComplex } from '../util/util';
 import { Repository } from '../../types/vscode-extension-git';
+import { tryExecAsync, tryExecFileAsync } from './gitCLI';
+import { RepositoryContext } from './repositoryContext';
 import { getConfiguration } from '../vscode/config';
-import { tryExecAsync } from './gitCLI';
 
 export async function applyGitStash(
 	uri: string,
@@ -54,10 +55,40 @@ export interface QuickCheckoutApplyInfo {
 	at: number;
 	used?: boolean;
 	id: string;
+	repositoryPath?: string;
+}
+
+async function readQuickCheckouts(): Promise<QuickCheckoutApplyInfo[]> {
+	return await storageGet('quickCheckoutStashes', StorageScope.WORKSPACE, []);
+}
+
+async function saveQuickCheckouts(
+	entries: readonly QuickCheckoutApplyInfo[]
+): Promise<void> {
+	await storageSet(
+		'quickCheckoutStashes',
+		[...entries],
+		StorageScope.WORKSPACE
+	);
+	await APISubscriptionManager.quickCheckoutSubscriptions.invalidate({});
+}
+
+async function getRestoreRef(
+	gerritRepo: Repository,
+	currentBranch: string
+): Promise<string | null> {
+	if (currentBranch !== 'HEAD') {
+		return currentBranch;
+	}
+	const result = await tryExecFileAsync('git', ['rev-parse', 'HEAD'], {
+		cwd: gerritRepo.rootUri.fsPath,
+		silent: true,
+	});
+	return result.success && result.stdout.trim() ? result.stdout.trim() : null;
 }
 
 export async function quickCheckout(
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	changeTreeView: ChangeTreeView
 ): Promise<boolean> {
 	const change = await changeTreeView.change;
@@ -65,6 +96,30 @@ export async function quickCheckout(
 		void window.showErrorMessage('Failed to get change');
 		return false;
 	}
+	const resolution = await repositoryContext.resolveWorktreeForBranch(
+		change.branch
+	);
+	if (resolution.kind === 'notFound') {
+		void window.showErrorMessage(
+			`No worktree tracks target branch "${resolution.targetBranch}"`
+		);
+		return false;
+	}
+	if (resolution.kind === 'ambiguous') {
+		void window.showErrorMessage(
+			'Multiple worktrees track target branch ' +
+				`"${resolution.targetBranch}": ` +
+				resolution.worktreePaths.join(', ')
+		);
+		return false;
+	}
+	if (resolution.kind === 'openFailed') {
+		void window.showErrorMessage(
+			`Failed to open worktree ${resolution.worktreePath}`
+		);
+		return false;
+	}
+	const gerritRepo = resolution.repository;
 	const result = await window.withProgress(
 		{
 			location: ProgressLocation.Notification,
@@ -91,18 +146,27 @@ export async function quickCheckout(
 				void window.showErrorMessage('Failed to get current branch');
 				return false;
 			}
+			const restoreRef = await getRestoreRef(gerritRepo, currentBranch);
+			if (!restoreRef) {
+				void window.showErrorMessage(
+					'Failed to record the current Git revision'
+				);
+				return false;
+			}
 
 			const applyInfo: QuickCheckoutApplyInfo = {
-				originalBranch: currentBranch,
+				originalBranch: restoreRef,
 				at: new Date().getTime(),
 				id: generateRandomString(),
+				repositoryPath: gerritRepo.rootUri.fsPath,
 			};
 			progress.report({
 				message: 'Creating stash',
 				increment: 5,
 			});
 			if (hasChanges) {
-				const stashName = `${currentBranch} - ${new Date().toLocaleTimeString()}`;
+				const stashName =
+					`${restoreRef} - ` + new Date().toLocaleTimeString();
 				if (
 					token.isCancellationRequested ||
 					!(await createStash(gerritRepo.rootUri.fsPath, stashName))
@@ -117,20 +181,11 @@ export async function quickCheckout(
 				message: 'Storing quick-checkout',
 				increment: 45,
 			});
-			const stashes = await storageGet(
-				'quickCheckoutStashes',
-				StorageScope.WORKSPACE,
-				[]
-			);
-			await storageSet(
-				'quickCheckoutStashes',
+			const stashes = await readQuickCheckouts();
+			await saveQuickCheckouts(
 				uniqueComplex([...stashes, applyInfo], (e) =>
 					quickCheckoutEntryToKey(e)
-				),
-				StorageScope.WORKSPACE
-			);
-			await APISubscriptionManager.quickCheckoutSubscriptions.invalidate(
-				{}
+				)
 			);
 			if (token.isCancellationRequested) {
 				return false;
@@ -153,6 +208,7 @@ export async function quickCheckout(
 				void window.showErrorMessage('Failed to checkout change');
 				return false;
 			}
+			repositoryContext.setActiveRepository(gerritRepo);
 
 			progress.report({
 				message: 'Done',
@@ -170,20 +226,39 @@ export function getQuickCheckoutSubscribable(): Subscribable<
 > {
 	return APISubscriptionManager.quickCheckoutSubscriptions.createFetcher(
 		{},
-		async () => {
-			return await storageGet(
-				'quickCheckoutStashes',
-				StorageScope.WORKSPACE,
-				[]
-			);
-		}
+		readQuickCheckouts
 	);
 }
 
+async function getStoredRepository(
+	repositoryContext: RepositoryContext,
+	info: QuickCheckoutApplyInfo
+): Promise<Repository | null> {
+	if (!info.repositoryPath) {
+		return repositoryContext.getActiveRepository();
+	}
+	const repository = await repositoryContext.openRepositoryAtPath(
+		info.repositoryPath
+	);
+	if (!repository) {
+		void window.showErrorMessage(
+			`Failed to open quick-checkout worktree ${info.repositoryPath}`
+		);
+	}
+	return repository;
+}
+
 export async function dropQuickCheckout(
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	treeItem: QuickCheckoutTreeEntry
 ): Promise<void> {
+	const gerritRepo = await getStoredRepository(
+		repositoryContext,
+		treeItem.info
+	);
+	if (!gerritRepo) {
+		return;
+	}
 	// Drop the stash first
 	if (
 		treeItem.info.stashName &&
@@ -195,18 +270,10 @@ export async function dropQuickCheckout(
 		return;
 	}
 
-	const stashes = await storageGet(
-		'quickCheckoutStashes',
-		StorageScope.WORKSPACE,
-		[]
+	const stashes = await readQuickCheckouts();
+	await saveQuickCheckouts(
+		stashes.filter((stash) => stash.id !== treeItem.info.id)
 	);
-	await storageSet(
-		'quickCheckoutStashes',
-		stashes.filter((s) => s.id !== treeItem.info.id),
-		StorageScope.WORKSPACE
-	);
-
-	await APISubscriptionManager.quickCheckoutSubscriptions.invalidate({});
 }
 
 async function shouldDropAllStashes(): Promise<boolean | null> {
@@ -253,13 +320,9 @@ async function shouldDropAllStashes(): Promise<boolean | null> {
 }
 
 export async function dropQuickCheckouts(
-	gerritRepo: Repository
+	repositoryContext: RepositoryContext
 ): Promise<void> {
-	const stashes = await storageGet(
-		'quickCheckoutStashes',
-		StorageScope.WORKSPACE,
-		[]
-	);
+	const stashes = await readQuickCheckouts();
 
 	const shouldDropStashes = await shouldDropAllStashes();
 	if (shouldDropStashes === null) {
@@ -270,7 +333,12 @@ export async function dropQuickCheckouts(
 		await Promise.all(
 			stashes.map(async (stash) => {
 				if (stash.stashName) {
+					const gerritRepo = await getStoredRepository(
+						repositoryContext,
+						stash
+					);
 					if (
+						!gerritRepo ||
 						!(await dropStash(
 							gerritRepo.rootUri.fsPath,
 							stash.stashName
@@ -287,8 +355,7 @@ export async function dropQuickCheckouts(
 		}
 	}
 
-	await storageSet('quickCheckoutStashes', [], StorageScope.WORKSPACE);
-	await APISubscriptionManager.quickCheckoutSubscriptions.invalidate({});
+	await saveQuickCheckouts([]);
 }
 
 async function applyQuickCheckoutShared(
@@ -319,9 +386,11 @@ async function applyQuickCheckoutShared(
 	});
 	// First check out branch
 	if (
-		!(await tryExecAsync(`git checkout ${info.originalBranch}`, {
-			cwd: gerritRepo.rootUri.fsPath,
-		}))
+		!(
+			await tryExecFileAsync('git', ['checkout', info.originalBranch], {
+				cwd: gerritRepo.rootUri.fsPath,
+			})
+		).success
 	) {
 		void window.showErrorMessage('Failed to checkout branch');
 		return false;
@@ -352,9 +421,16 @@ async function applyQuickCheckoutShared(
 }
 
 export async function applyQuickCheckout(
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	treeItem: QuickCheckoutTreeEntry
 ): Promise<void> {
+	const gerritRepo = await getStoredRepository(
+		repositoryContext,
+		treeItem.info
+	);
+	if (!gerritRepo) {
+		return;
+	}
 	await window.withProgress(
 		{
 			location: ProgressLocation.Notification,
@@ -377,22 +453,13 @@ export async function applyQuickCheckout(
 				message: 'Updating storage',
 			});
 			// Then mark as used and store
-			const stashes = await storageGet(
-				'quickCheckoutStashes',
-				StorageScope.WORKSPACE,
-				[]
-			);
-			const match = stashes.find((s) => s.id === treeItem.info.id)!;
-			match.used = true;
-			await storageSet(
-				'quickCheckoutStashes',
-				stashes,
-				StorageScope.WORKSPACE
-			);
-
-			await APISubscriptionManager.quickCheckoutSubscriptions.invalidate(
-				{}
-			);
+			const stashes = await readQuickCheckouts();
+			const match = stashes.find((s) => s.id === treeItem.info.id);
+			if (match) {
+				match.used = true;
+			}
+			await saveQuickCheckouts(stashes);
+			repositoryContext.setActiveRepository(gerritRepo);
 
 			progress.report({
 				increment: 10,
@@ -404,10 +471,14 @@ export async function applyQuickCheckout(
 }
 
 export async function popQuickCheckout(
-	gerritRepo: Repository,
+	repositoryContext: RepositoryContext,
 	treeItem: QuickCheckoutTreeEntry | QuickCheckoutApplyInfo
 ): Promise<void> {
 	const info = 'info' in treeItem ? treeItem.info : treeItem;
+	const gerritRepo = await getStoredRepository(repositoryContext, info);
+	if (!gerritRepo) {
+		return;
+	}
 	await window.withProgress(
 		{
 			location: ProgressLocation.Notification,
@@ -443,20 +514,11 @@ export async function popQuickCheckout(
 			}
 
 			// Now drop it
-			const stashes = await storageGet(
-				'quickCheckoutStashes',
-				StorageScope.WORKSPACE,
-				[]
+			const stashes = await readQuickCheckouts();
+			await saveQuickCheckouts(
+				stashes.filter((stash) => stash.id !== info.id)
 			);
-			await storageSet(
-				'quickCheckoutStashes',
-				stashes.filter((s) => s.id === info.id),
-				StorageScope.WORKSPACE
-			);
-
-			await APISubscriptionManager.quickCheckoutSubscriptions.invalidate(
-				{}
-			);
+			repositoryContext.setActiveRepository(gerritRepo);
 
 			progress.report({
 				increment: 10,

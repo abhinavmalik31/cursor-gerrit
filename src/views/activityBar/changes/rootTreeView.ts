@@ -1,4 +1,4 @@
-import { Repository } from '../../../types/vscode-extension-git';
+import { RepositoryContext } from '../../../lib/git/repositoryContext';
 import { getConfiguration } from '../../../lib/vscode/config';
 import { TreeItemWithChildren } from '../shared/treeTypes';
 import { configureChangeLists } from './changeCommands';
@@ -10,7 +10,7 @@ export class RootTreeViewProvider implements TreeItemWithChildren {
 	private _lastChildren: ViewPanel[] = [];
 
 	public constructor(
-		private readonly _gerritRepo: Repository,
+		private readonly _repositoryContext: RepositoryContext,
 		public readonly root: ChangesTreeProvider
 	) {}
 
@@ -61,7 +61,7 @@ export class RootTreeViewProvider implements TreeItemWithChildren {
 			}
 
 			return selectedView.panels.map((panel) => {
-				return new ViewPanel(this._gerritRepo, this, panel);
+				return new ViewPanel(this._repositoryContext, this, panel);
 			});
 		})();
 		return (this._lastChildren = children);

@@ -7,6 +7,7 @@ import { GerritChange } from '../../../lib/gerrit/gerritAPI/gerritChange';
 import { TreeItemWithChildren, TreeViewItem } from '../shared/treeTypes';
 import { Subscribable } from '../../../lib/subscriptions/subscriptions';
 import { Disposable, TreeItem, TreeItemCollapsibleState } from 'vscode';
+import { RepositoryContext } from '../../../lib/git/repositoryContext';
 import { ChangeTreeView, PatchsetDescription } from './changeTreeView';
 import { GerritAPIWith } from '../../../lib/gerrit/gerritAPI/api';
 import { Repository } from '../../../types/vscode-extension-git';
@@ -43,8 +44,12 @@ export class ViewPanel
 		}
 	> = new Map();
 
+	protected get _gerritRepo(): Repository {
+		return this._repositoryContext.getActiveRepository();
+	}
+
 	public constructor(
-		protected readonly _gerritRepo: Repository,
+		private readonly _repositoryContext: RepositoryContext,
 		public readonly parent: RootTreeViewProvider,
 		private readonly _panel: ChangesPanel
 	) {

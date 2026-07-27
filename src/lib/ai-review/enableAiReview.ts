@@ -57,7 +57,7 @@ export async function enableAiReview(context: ExtensionContext): Promise<void> {
 					message: 'Extracting credentials...',
 				});
 
-				const credentials = await extractCredentials(context);
+				const credentials = await extractCredentials();
 				if (!credentials) {
 					void window.showWarningMessage(
 						'Could not extract Gerrit credentials. ' +
@@ -401,11 +401,9 @@ async function ensureCursorApiKey(): Promise<void> {
 	log('Cursor API key saved for AI Review');
 }
 
-async function extractCredentials(
-	context: ExtensionContext
-): Promise<GerritCredentials | null> {
+async function extractCredentials(): Promise<GerritCredentials | null> {
 	const config = getConfiguration();
-	const gerritRepo = await getGerritRepo(context);
+	const gerritRepo = await getGerritRepo();
 	const gitReviewFile = gerritRepo
 		? await getGitReviewFileCached(gerritRepo)
 		: null;

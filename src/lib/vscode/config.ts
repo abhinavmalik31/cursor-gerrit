@@ -2,7 +2,7 @@ import {
 	GetConfigurationType,
 	TypedWorkspaceConfiguration,
 } from 'vscode-generate-package-json';
-import { commands, window, workspace } from 'vscode';
+import { window, workspace } from 'vscode';
 import { config } from '../../commands/defs';
 
 export enum GerritChangesView {
@@ -32,21 +32,6 @@ export function getConfiguration(): TypedWorkspaceConfiguration<ConfigSettings> 
 	}
 
 	return workspace.getConfiguration();
-}
-
-export function initConfigListener(): void {
-	workspace.onDidChangeConfiguration(async (e) => {
-		if (e.affectsConfiguration('gerrit.gitRepo')) {
-			const RELOAD_OPTION = 'Reload';
-			const choice = await window.showInformationMessage(
-				'Gerrit: Please reload the extension to apply changes',
-				RELOAD_OPTION
-			);
-			if (choice === RELOAD_OPTION) {
-				await commands.executeCommand('workbench.action.reloadWindow');
-			}
-		}
-	});
 }
 
 /**

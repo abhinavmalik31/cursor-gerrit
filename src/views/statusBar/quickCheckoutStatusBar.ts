@@ -12,6 +12,7 @@ import { storageGet, StorageScope, storageSet } from '../../lib/vscode/storage';
 import { GerritExtensionCommands } from '../../commands/command-names';
 import { getConfiguration } from '../../lib/vscode/config';
 import { arrDiff } from '../../lib/util/util';
+import * as path from 'path';
 
 interface StatusBarEntry {
 	update(newInfo: QuickCheckoutApplyInfo): void;
@@ -25,8 +26,10 @@ function createSingleIcon(info: QuickCheckoutApplyInfo): StatusBarEntry {
 
 	const returnValue = {
 		update(newInfo: QuickCheckoutApplyInfo) {
-			statusBar.tooltip = `Jump back to ${
-				newInfo.originalBranch
+			statusBar.tooltip = `Jump back to ${newInfo.originalBranch} in ${
+				newInfo.repositoryPath
+					? path.basename(newInfo.repositoryPath)
+					: 'the active worktree'
 			} and apply stash ${newInfo.used ? ' (stash used before)' : ''}`;
 			statusBar.command = {
 				command: GerritExtensionCommands.QUICK_CHECKOUT_POP,
@@ -44,9 +47,9 @@ function createSingleIcon(info: QuickCheckoutApplyInfo): StatusBarEntry {
 }
 
 export function quickCheckoutEntryToKey(entry: QuickCheckoutApplyInfo): string {
-	return `${entry.originalBranch}${entry.stashName ?? '-'}${
-		entry.used ? 'used' : ''
-	}`;
+	return `${entry.repositoryPath ?? '-'}${entry.originalBranch}${
+		entry.stashName ?? '-'
+	}${entry.used ? 'used' : ''}`;
 }
 
 const entries: Map<string, StatusBarEntry> = new Map();

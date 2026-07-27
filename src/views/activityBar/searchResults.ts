@@ -12,6 +12,7 @@ import { getContextProp, setContextProp } from '../../lib/vscode/context';
 import { GerritChange } from '../../lib/gerrit/gerritAPI/gerritChange';
 import { showInvalidSettingsMessage } from '../../lib/vscode/messages';
 import { Subscribable } from '../../lib/subscriptions/subscriptions';
+import { RepositoryContext } from '../../lib/git/repositoryContext';
 import { FetchMoreTreeItem } from './changes/fetchMoreTreeItem';
 import { GerritAPIWith } from '../../lib/gerrit/gerritAPI/api';
 import { Repository } from '../../types/vscode-extension-git';
@@ -45,7 +46,11 @@ export class SearchResultsTreeProvider
 
 	public treeView!: TreeView<TreeViewItem>;
 
-	public constructor(protected readonly _gerritRepo: Repository) {
+	protected get _gerritRepo(): Repository {
+		return this._repositoryContext.getActiveRepository();
+	}
+
+	public constructor(private readonly _repositoryContext: RepositoryContext) {
 		super('SearchResults');
 		SearchResultsTreeProvider._instances.add(this);
 	}

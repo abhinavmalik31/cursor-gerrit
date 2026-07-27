@@ -1,6 +1,8 @@
 import {
 	ChildProcessWithoutNullStreams,
 	exec,
+	execFile,
+	ExecFileOptions,
 	ExecException,
 	ExecOptions,
 	spawn,
@@ -56,6 +58,37 @@ export async function tryExecAsync(
 		exec(cmd, options, (err, stdout, stderr) => {
 			if (err && !options?.silent) {
 				log(`Tried to run "${cmd}", but failed`);
+				log(`Stdout: ${stdout.toString()}`);
+				log(`Stderr: ${stderr.toString()}`);
+				log(`Error: ${err.message}`);
+			}
+			resolve({
+				success: !err,
+				stdout: stdout.toString(),
+				stderr: stderr.toString(),
+				err,
+			});
+		});
+	});
+}
+
+export async function tryExecFileAsync(
+	file: string,
+	args: string[],
+	options?: ExecFileOptions & {
+		silent?: boolean;
+	}
+): Promise<{
+	success: boolean;
+	stdout: string;
+	stderr: string;
+	err: Error | null;
+}> {
+	const { silent, ...execOptions } = options ?? {};
+	return await new Promise((resolve) => {
+		execFile(file, args, execOptions, (err, stdout, stderr) => {
+			if (err && !silent) {
+				log(`Tried to run "${file} ${args.join(' ')}", but failed`);
 				log(`Stdout: ${stdout.toString()}`);
 				log(`Stderr: ${stderr.toString()}`);
 				log(`Error: ${err.message}`);

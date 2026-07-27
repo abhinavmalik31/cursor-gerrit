@@ -19,6 +19,7 @@ import { Subscribable } from '../../lib/subscriptions/subscriptions';
 import { TREE_ITEM_TYPE_QUICK_CHECKOUT } from '../../lib/util/magic';
 import { DateTime } from '../../lib/util/dateTime';
 import { ViewPanel } from './changes/viewPanel';
+import * as path from 'path';
 
 export class QuickCheckoutProvider
 	implements TreeDataProvider<TreeViewItem>, Disposable
@@ -80,7 +81,11 @@ export class QuickCheckoutTreeEntry implements TreeItemWithoutChildren {
 	public getItem(): TreeItem | Promise<TreeItem> {
 		return {
 			label: this.info.originalBranch,
-			description: `- ${new DateTime(this.info.at).formatRelative()}`,
+			description: `${
+				this.info.repositoryPath
+					? path.basename(this.info.repositoryPath)
+					: 'active worktree'
+			} - ${new DateTime(this.info.at).formatRelative()}`,
 			collapsibleState: TreeItemCollapsibleState.None,
 			contextValue: TREE_ITEM_TYPE_QUICK_CHECKOUT,
 			tooltip: `Stash on branch ${

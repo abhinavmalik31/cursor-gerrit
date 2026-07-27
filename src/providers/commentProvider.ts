@@ -41,6 +41,7 @@ import { uniqueComplex } from '../lib/util/util';
 import * as gitDiffParser from 'gitdiff-parser';
 import path = require('path');
 import { PatchsetDescription } from '../views/activityBar/changes/changeTreeView';
+import { RepositoryContext } from '../lib/git/repositoryContext';
 import { Repository } from '../types/vscode-extension-git';
 
 export interface GerritCommentReply {
@@ -612,7 +613,9 @@ export class CommentManager {
 		return line + delta;
 	}
 
-	public static init(gerritRepo: Repository): typeof CommentManager {
+	public static init(
+		repositoryContext: RepositoryContext
+	): typeof CommentManager {
 		this._disposables.add(
 			workspace.onDidCloseTextDocument((doc) => {
 				const key = doc.uri.toString();
@@ -659,6 +662,7 @@ export class CommentManager {
 					}
 					return [new Range(0, 0, lineCount - 1, 0)];
 				} else {
+					const gerritRepo = repositoryContext.getActiveRepository();
 					const file = await CommentManager.getFileFromOpenDocument(
 						gerritRepo,
 						document

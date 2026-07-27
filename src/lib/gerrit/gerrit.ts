@@ -1,23 +1,24 @@
 import {
-	ConfigurationTarget,
-	Disposable,
-	ExtensionContext,
-	extensions,
-	QuickPickItem,
-	Uri,
-	window,
-	workspace,
-} from 'vscode';
-import {
 	API,
 	GitExtension,
 	Repository,
 } from '../../types/vscode-extension-git';
-import { GitCommit, tryExecAsync } from '../git/gitCLI';
-import { getConfiguration } from '../vscode/config';
+import { arePathsEqual, parseWorktreePaths } from '../git/worktree';
+import { extensions, QuickPickItem, window, workspace } from 'vscode';
+import { RepositoryContext } from '../git/repositoryContext';
+import { GitCommit, tryExecFileAsync } from '../git/gitCLI';
+import { openGitRepository } from '../git/openRepository';
 import { isGerritCommit } from '../git/commit';
 import { wait } from '../util/util';
 import { log } from '../util/log';
+
+const GIT_COMMAND_TIMEOUT_MS = 10000;
+
+interface GitRepoQuickPickItem extends QuickPickItem {
+	readonly repoPath: string;
+}
+
+let repositoryContextPromise: Promise<RepositoryContext | null> | null = null;
 
 async function tryGetGitAPI(): Promise<false | API> {
 	for (let i = 0; i < 1000 * 60; await wait(1000), i += 1000) {
@@ -33,208 +34,146 @@ async function tryGetGitAPI(): Promise<false | API> {
 			}
 
 			return extension.exports.getAPI(1);
-		} catch (e) {
+		} catch (error) {
 			log('Failed to get git API, retrying in 1 second');
-			continue;
 		}
 	}
 
 	log(
 		'Failed to get git API after 60 seconds, ' +
-			'it looks like VSCode has disconnected ' +
-			'from the host'
+			'it looks like VSCode has disconnected from the host'
 	);
-
 	return false;
 }
 
-/**
- * Make sure the repository containing each workspace folder is opened in the
- * git API. When a nested subfolder is opened (e.g. ".../new-view/aiops"), the
- * actual git root lives in a parent folder, which VSCode only opens depending
- * on the "git.openRepositoryInParentFolders" setting. We resolve the real
- * toplevel ourselves and open it so the extension does not silently disable.
- */
-async function ensureWorkspaceReposOpened(gitAPI: API): Promise<void> {
+async function getOpenedGitRoot(gitAPI: API): Promise<string | null> {
 	for (const folder of workspace.workspaceFolders ?? []) {
 		if (folder.uri.scheme !== 'file') {
 			continue;
 		}
-
-		const { success, stdout } = await tryExecAsync(
-			'git rev-parse --show-toplevel',
-			{ cwd: folder.uri.fsPath }
+		const result = await tryExecFileAsync(
+			'git',
+			['rev-parse', '--show-toplevel'],
+			{
+				cwd: folder.uri.fsPath,
+				silent: true,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			}
 		);
-		const toplevel = stdout.trim();
-		if (!success || !toplevel) {
-			continue;
-		}
-
-		if (
-			gitAPI.repositories.some(
-				(repo) => repo.rootUri.fsPath === toplevel
-			)
-		) {
-			continue;
-		}
-
-		try {
-			await gitAPI.openRepository(Uri.file(toplevel));
-		} catch (e) {
-			log(`Failed to open repository at ${toplevel}: ${e}`);
+		if (result.success && result.stdout.trim()) {
+			return result.stdout.trim();
 		}
 	}
+	return gitAPI.repositories[0]?.rootUri.fsPath ?? null;
 }
 
-async function getGerritRepos(silent: boolean = true): Promise<Repository[]> {
+async function getWorktreePaths(rootPath: string): Promise<string[]> {
+	const result = await tryExecFileAsync(
+		'git',
+		['worktree', 'list', '--porcelain', '-z'],
+		{
+			cwd: rootPath,
+			silent: true,
+			timeout: GIT_COMMAND_TIMEOUT_MS,
+		}
+	);
+	if (!result.success) {
+		return [rootPath];
+	}
+	return parseWorktreePaths(result.stdout);
+}
+
+async function usesGerrit(rootPath: string): Promise<boolean> {
+	const result = await tryExecFileAsync(
+		'git',
+		['log', '--all', '--format=%B', '-z', '-n', '50'],
+		{
+			cwd: rootPath,
+			silent: true,
+			timeout: GIT_COMMAND_TIMEOUT_MS,
+		}
+	);
+	return (
+		result.success &&
+		isGerritCommit({
+			hash: '',
+			message: result.stdout,
+		} as GitCommit)
+	);
+}
+
+async function createRepositoryContext(): Promise<RepositoryContext | null> {
 	const gitAPI = await tryGetGitAPI();
 	if (!gitAPI) {
-		return [];
+		return null;
 	}
-	await ensureWorkspaceReposOpened(gitAPI);
-	const gerritRepos: Repository[] = [];
-	for (const repo of gitAPI.repositories) {
-		try {
-			const commits = await repo.log({
-				maxEntries: 50,
-			});
-
-			if (commits.length === 0) {
-				if (!silent) {
-					log('No commits found, skipping repo.');
-				}
-				continue;
-			}
-
-			const hasGerritCommit = commits.some((c) =>
-				isGerritCommit(c as unknown as GitCommit)
-			);
-			if (!hasGerritCommit) {
-				if (!silent) {
-					log(
-						'No gerrit commits found in ' +
-							'last 50 commits, skipping repo.'
-					);
-				}
-				continue;
-			}
-
-			gerritRepos.push(repo);
-		} catch (e) {
-			if (!silent) {
-				log(`Error checking repo: ${e}`);
-			}
-		}
+	const rootPath = await getOpenedGitRoot(gitAPI);
+	if (!rootPath) {
+		log('Did not find a Git repository in this workspace');
+		return null;
 	}
-	return gerritRepos;
+	if (!(await usesGerrit(rootPath))) {
+		log(`No recent Gerrit commits found for ${rootPath}`);
+		return null;
+	}
+
+	const [controlRepository, worktreePaths] = await Promise.all([
+		openGitRepository(gitAPI, rootPath),
+		getWorktreePaths(rootPath),
+	]);
+	if (!controlRepository) {
+		return null;
+	}
+
+	const repositoryContext = new RepositoryContext(
+		gitAPI,
+		controlRepository,
+		worktreePaths
+	);
+	log(
+		`Using Gerrit ${
+			repositoryContext.isViewTop ? 'viewtop' : 'repository'
+		}: ${rootPath}`
+	);
+	return repositoryContext;
+}
+
+export async function getRepositoryContext(): Promise<RepositoryContext | null> {
+	repositoryContextPromise ??= createRepositoryContext();
+	const repositoryContext = await repositoryContextPromise;
+	if (!repositoryContext) {
+		repositoryContextPromise = null;
+	}
+	return repositoryContext;
+}
+
+export async function getGerritRepo(): Promise<Repository | null> {
+	return (await getRepositoryContext())?.getActiveRepository() ?? null;
 }
 
 export async function pickGitRepo(): Promise<Repository | null> {
-	const gerritRepos = await getGerritRepos(false);
-	const items: QuickPickItem[] = gerritRepos.map((repo) => {
-		return {
-			label: repo.rootUri.fsPath,
-		};
-	});
-	const quickPickChoice = await window.showQuickPick(items, {
-		title: 'Please pick a gerrit root to use with this extension (you can change this later with the "Gerrit: change git repo" command)',
-	});
-
-	if (!quickPickChoice) {
+	const repositoryContext = await getRepositoryContext();
+	if (!repositoryContext) {
 		return null;
 	}
-
-	await getConfiguration().update(
-		'gerrit.gitRepo',
-		quickPickChoice.label,
-		ConfigurationTarget.Workspace
+	await repositoryContext.refreshWorktrees();
+	const items: GitRepoQuickPickItem[] = repositoryContext.worktreePaths.map(
+		(worktreePath) => ({
+			label: worktreePath,
+			description: arePathsEqual(
+				worktreePath,
+				repositoryContext.getActiveRepository().rootUri.fsPath
+			)
+				? 'Active command context'
+				: undefined,
+			repoPath: worktreePath,
+		})
 	);
-	return gerritRepos.find(
-		(repo) => repo.rootUri.fsPath === quickPickChoice.label
-	)!;
-}
-
-async function scanGerritRepos(gitAPI: API): Promise<Repository | null> {
-	if (gitAPI.repositories.length === 0) {
-		log('Did not find any git repositories, exiting');
-		return null;
-	}
-
-	const gerritRepos = await getGerritRepos(true);
-	if (gerritRepos.length === 0) {
-		log(
-			`Found no gerrit repos in ${gitAPI.repositories.length} repositories, exiting`
-		);
-		return null;
-	} else if (gerritRepos.length === 1) {
-		return gerritRepos[0];
-	} else {
-		const config = getConfiguration().get('gerrit.gitRepo');
-		const match = gerritRepos.find(
-			(repo) => repo.rootUri.fsPath === config
-		);
-		if (match) {
-			return match;
-		}
-
-		// Ask user to choose
-		const CHOOSE_OPTION = 'Choose from dropdown';
-		const CANCEL_OPTION = 'Cancel';
-		const choice = await window.showInformationMessage(
-			'Gerrit: found multiple gerrit roots, please choose which one you\'d like to use the extension with. (you can change this later with the "Gerrit: change git repo" command',
-			CHOOSE_OPTION,
-			CANCEL_OPTION
-		);
-
-		if (choice !== CHOOSE_OPTION) {
-			await window.showInformationMessage('Gerrit: disabled for now');
-			return null;
-		}
-
-		const pickedRepo = await pickGitRepo();
-		if (!pickedRepo) {
-			await window.showInformationMessage('Gerrit: disabled for now');
-		}
-		return pickedRepo;
-	}
-}
-
-export async function getGerritRepo(
-	context: ExtensionContext
-): Promise<Repository | null> {
-	const gitAPI = await tryGetGitAPI();
-	if (!gitAPI) {
-		return null;
-	}
-
-	// If a gerrit repo has been manually set, force-open that one
-	const pickedRepo = getConfiguration().get('gerrit.gitRepo');
-	if (
-		pickedRepo &&
-		!gitAPI.repositories.find((repo) => repo.rootUri.fsPath === pickedRepo)
-	) {
-		await gitAPI.openRepository(Uri.file(pickedRepo));
-	}
-
-	const scannedRepo = await scanGerritRepos(gitAPI);
-	if (scannedRepo) {
-		return scannedRepo;
-	}
-	return new Promise<Repository>((resolve) => {
-		let listener: Disposable | null = gitAPI.onDidOpenRepository(
-			async () => {
-				const repo = await scanGerritRepos(gitAPI);
-				if (repo) {
-					resolve(repo);
-					listener?.dispose();
-					listener = null;
-				}
-			}
-		);
-		context.subscriptions.push({
-			dispose: () => {
-				listener?.dispose();
-			},
-		});
+	const selection = await window.showQuickPick(items, {
+		title: 'Choose the Gerrit worktree used by commands',
 	});
+	if (!selection) {
+		return null;
+	}
+	return await repositoryContext.setActiveRepositoryPath(selection.repoPath);
 }
