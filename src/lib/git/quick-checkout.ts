@@ -26,6 +26,7 @@ import { generateRandomString, uniqueComplex } from '../util/util';
 import { resolveWorktreePath } from './viewtop';
 import { getConfiguration } from '../vscode/config';
 import { tryExecAsync } from './gitCLI';
+import * as path from 'path';
 
 export async function applyGitStash(
 	uri: string,
@@ -184,7 +185,10 @@ export async function quickCheckout(
 				message: 'Done',
 				increment: 45,
 			});
-			void window.showInformationMessage('Checked out change');
+			void window.showInformationMessage(
+				`Checked out change ${change.number} in ` +
+					path.basename(worktreePath)
+			);
 			return true;
 		}
 	);
