@@ -491,33 +491,33 @@ export function registerCommands(
 		registerCommand(
 			GerritExtensionCommands.QUICK_CHECKOUT,
 			(changeTreeView: ChangeTreeView) =>
-				quickCheckout(gerritRepo, changeTreeView)
+				quickCheckout(gerritRepo.rootUri.fsPath, changeTreeView)
 		)
 	);
 	context.subscriptions.push(
 		registerCommand(
 			GerritExtensionCommands.DROP_QUICK_CHECKOUT,
 			(treeItem: QuickCheckoutTreeEntry) =>
-				dropQuickCheckout(gerritRepo, treeItem)
+				dropQuickCheckout(gerritRepo.rootUri.fsPath, treeItem)
 		)
 	);
 	context.subscriptions.push(
 		registerCommand(
 			GerritExtensionCommands.QUICK_CHECKOUT_APPLY,
 			(treeItem: QuickCheckoutTreeEntry) =>
-				applyQuickCheckout(gerritRepo, treeItem)
+				applyQuickCheckout(gerritRepo.rootUri.fsPath, treeItem)
 		)
 	);
 	context.subscriptions.push(
 		registerCommand(
 			GerritExtensionCommands.QUICK_CHECKOUT_POP,
 			(treeItem: QuickCheckoutTreeEntry) =>
-				popQuickCheckout(gerritRepo, treeItem)
+				popQuickCheckout(gerritRepo.rootUri.fsPath, treeItem)
 		)
 	);
 	context.subscriptions.push(
 		registerCommand(GerritExtensionCommands.DROP_QUICK_CHECKOUTS, () =>
-			dropQuickCheckouts(gerritRepo)
+			dropQuickCheckouts(gerritRepo.rootUri.fsPath)
 		)
 	);
 

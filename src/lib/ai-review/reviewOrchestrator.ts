@@ -98,7 +98,10 @@ async function doReview(
 		});
 
 		if (changeTreeView) {
-			const ok = await quickCheckout(gerritRepo, changeTreeView);
+			const ok = await quickCheckout(
+				gerritRepo.rootUri.fsPath,
+				changeTreeView
+			);
 			if (!ok) {
 				throw new Error(
 					'Failed to checkout change ' +

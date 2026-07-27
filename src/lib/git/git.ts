@@ -421,12 +421,12 @@ export async function gitFetchAndCheckoutChange(
 }
 
 export async function gitCheckoutRemote(
-	gerritRepo: Repository,
+	repoPath: string,
 	patchNumberOrChangeID: number | string,
 	patchSet: number | undefined = undefined,
 	silent: boolean = false
 ): Promise<boolean> {
-	const uri = gerritRepo.rootUri.fsPath;
+	const uri = repoPath;
 	if (!(await ensureCleanWorkingTree(uri, silent))) {
 		return false;
 	}
@@ -625,9 +625,9 @@ export async function gitReview(gerritRepo: Repository): Promise<void> {
 }
 
 export async function getCurrentBranch(
-	gerritRepo: Repository
+	repoPath: string
 ): Promise<string | null> {
-	const uri = gerritRepo.rootUri.fsPath;
+	const uri = repoPath;
 	const { stdout, success } = await tryExecAsync(
 		'git rev-parse --abbrev-ref HEAD',
 		{

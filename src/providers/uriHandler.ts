@@ -48,7 +48,7 @@ export class URIHandler implements UriHandler {
 			// If set, checkout change, if not, stay on master and diff
 			if (
 				!(await gitCheckoutRemote(
-					this._gerritRepo,
+					this._gerritRepo.rootUri.fsPath,
 					changeID,
 					query.patchSet ? Number(query.patchSet) : undefined,
 					false

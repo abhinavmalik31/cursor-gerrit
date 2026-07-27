@@ -207,7 +207,10 @@ export async function openChangeSelector(
 			text: `$(loading~spin) Checking out #${change.changeId}`,
 			tooltip: `Checking out change #${change.changeId}`,
 		});
-		const success = await gitCheckoutRemote(gerritRepo, change.changeId);
+		const success = await gitCheckoutRemote(
+			gerritRepo.rootUri.fsPath,
+			change.changeId
+		);
 		statusBar.setOverride(null);
 		if (success) {
 			void window.showInformationMessage(

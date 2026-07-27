@@ -23,7 +23,7 @@ import { ChangeTreeView } from '../../views/activityBar/changes/changeTreeView';
 import { QuickCheckoutTreeEntry } from '../../views/activityBar/quickCheckout';
 import { storageGet, StorageScope, storageSet } from '../vscode/storage';
 import { generateRandomString, uniqueComplex } from '../util/util';
-import { Repository } from '../../types/vscode-extension-git';
+import { resolveWorktreePath } from './viewtop';
 import { getConfiguration } from '../vscode/config';
 import { tryExecAsync } from './gitCLI';
 
@@ -54,15 +54,40 @@ export interface QuickCheckoutApplyInfo {
 	at: number;
 	used?: boolean;
 	id: string;
+	/**
+	 * Worktree the checkout was performed in. Absent for entries created
+	 * before viewtop support existed, in which case the active repository is
+	 * used as a fallback.
+	 */
+	repositoryPath?: string;
+}
+
+/**
+ * Resolve the worktree a stored quick-checkout entry belongs to, falling back
+ * to the active repository for entries created before 'repositoryPath' was
+ * recorded.
+ */
+function getStoredRepoPath(
+	repoPath: string,
+	info: QuickCheckoutApplyInfo
+): string {
+	return info.repositoryPath ?? repoPath;
 }
 
 export async function quickCheckout(
-	gerritRepo: Repository,
+	repoPath: string,
 	changeTreeView: ChangeTreeView
 ): Promise<boolean> {
 	const change = await changeTreeView.change;
 	if (!change) {
 		void window.showErrorMessage('Failed to get change');
+		return false;
+	}
+	const worktreePath = await resolveWorktreePath(repoPath, change.branch);
+	if (!worktreePath) {
+		void window.showErrorMessage(
+			`No worktree tracks target branch "${change.branch}"`
+		);
 		return false;
 	}
 	const result = await window.withProgress(
@@ -79,11 +104,11 @@ export async function quickCheckout(
 				increment: 0,
 			});
 			const hasChanges = !(await ensureCleanWorkingTree(
-				gerritRepo.rootUri.fsPath,
+				worktreePath,
 				true
 			));
 
-			const currentBranch = await getCurrentBranch(gerritRepo);
+			const currentBranch = await getCurrentBranch(worktreePath);
 			if (token.isCancellationRequested) {
 				return false;
 			}
@@ -96,6 +121,7 @@ export async function quickCheckout(
 				originalBranch: currentBranch,
 				at: new Date().getTime(),
 				id: generateRandomString(),
+				repositoryPath: worktreePath,
 			};
 			progress.report({
 				message: 'Creating stash',
@@ -105,7 +131,7 @@ export async function quickCheckout(
 				const stashName = `${currentBranch} - ${new Date().toLocaleTimeString()}`;
 				if (
 					token.isCancellationRequested ||
-					!(await createStash(gerritRepo.rootUri.fsPath, stashName))
+					!(await createStash(worktreePath, stashName))
 				) {
 					return false;
 				}
@@ -147,7 +173,7 @@ export async function quickCheckout(
 				changeNum,
 				'latest',
 				'origin',
-				gerritRepo.rootUri.fsPath
+				worktreePath
 			);
 			if (!result.success) {
 				void window.showErrorMessage('Failed to checkout change');
@@ -181,13 +207,14 @@ export function getQuickCheckoutSubscribable(): Subscribable<
 }
 
 export async function dropQuickCheckout(
-	gerritRepo: Repository,
+	repoPath: string,
 	treeItem: QuickCheckoutTreeEntry
 ): Promise<void> {
+	const worktreePath = getStoredRepoPath(repoPath, treeItem.info);
 	// Drop the stash first
 	if (
 		treeItem.info.stashName &&
-		!(await dropStash(gerritRepo.rootUri.fsPath, treeItem.info.stashName))
+		!(await dropStash(worktreePath, treeItem.info.stashName))
 	) {
 		void window.showErrorMessage(
 			'Failed to drop stash, see log for details'
@@ -252,9 +279,7 @@ async function shouldDropAllStashes(): Promise<boolean | null> {
 	return getConfiguration().get('gerrit.quickCheckout.dropAllStashes', false);
 }
 
-export async function dropQuickCheckouts(
-	gerritRepo: Repository
-): Promise<void> {
+export async function dropQuickCheckouts(repoPath: string): Promise<void> {
 	const stashes = await storageGet(
 		'quickCheckoutStashes',
 		StorageScope.WORKSPACE,
@@ -272,7 +297,7 @@ export async function dropQuickCheckouts(
 				if (stash.stashName) {
 					if (
 						!(await dropStash(
-							gerritRepo.rootUri.fsPath,
+							getStoredRepoPath(repoPath, stash),
 							stash.stashName
 						))
 					) {
@@ -292,7 +317,7 @@ export async function dropQuickCheckouts(
 }
 
 async function applyQuickCheckoutShared(
-	gerritRepo: Repository,
+	worktreePath: string,
 	info: QuickCheckoutApplyInfo,
 	progress: Progress<{
 		message?: string | undefined;
@@ -305,7 +330,7 @@ async function applyQuickCheckoutShared(
 		message: 'Checking if working tree is clean',
 	});
 	if (
-		!(await ensureCleanWorkingTree(gerritRepo.rootUri.fsPath)) ||
+		!(await ensureCleanWorkingTree(worktreePath)) ||
 		token.isCancellationRequested
 	) {
 		return false;
@@ -320,7 +345,7 @@ async function applyQuickCheckoutShared(
 	// First check out branch
 	if (
 		!(await tryExecAsync(`git checkout ${info.originalBranch}`, {
-			cwd: gerritRepo.rootUri.fsPath,
+			cwd: worktreePath,
 		}))
 	) {
 		void window.showErrorMessage('Failed to checkout branch');
@@ -336,7 +361,7 @@ async function applyQuickCheckoutShared(
 			increment: 40,
 			message: 'Applying stash',
 		});
-		if (!(await applyGitStash(gerritRepo.rootUri.fsPath, info.stashName))) {
+		if (!(await applyGitStash(worktreePath, info.stashName))) {
 			return false;
 		}
 		progress.report({
@@ -352,9 +377,10 @@ async function applyQuickCheckoutShared(
 }
 
 export async function applyQuickCheckout(
-	gerritRepo: Repository,
+	repoPath: string,
 	treeItem: QuickCheckoutTreeEntry
 ): Promise<void> {
+	const worktreePath = getStoredRepoPath(repoPath, treeItem.info);
 	await window.withProgress(
 		{
 			location: ProgressLocation.Notification,
@@ -364,7 +390,7 @@ export async function applyQuickCheckout(
 		async (progress, token) => {
 			if (
 				!(await applyQuickCheckoutShared(
-					gerritRepo,
+					worktreePath,
 					treeItem.info,
 					progress,
 					token
@@ -404,10 +430,11 @@ export async function applyQuickCheckout(
 }
 
 export async function popQuickCheckout(
-	gerritRepo: Repository,
+	repoPath: string,
 	treeItem: QuickCheckoutTreeEntry | QuickCheckoutApplyInfo
 ): Promise<void> {
 	const info = 'info' in treeItem ? treeItem.info : treeItem;
+	const worktreePath = getStoredRepoPath(repoPath, info);
 	await window.withProgress(
 		{
 			location: ProgressLocation.Notification,
@@ -417,7 +444,7 @@ export async function popQuickCheckout(
 		async (progress, token) => {
 			if (
 				!(await applyQuickCheckoutShared(
-					gerritRepo,
+					worktreePath,
 					info,
 					progress,
 					token
@@ -432,10 +459,7 @@ export async function popQuickCheckout(
 			});
 			if (info.stashName) {
 				if (
-					!(await dropStash(
-						gerritRepo.rootUri.fsPath,
-						info.stashName
-					)) ||
+					!(await dropStash(worktreePath, info.stashName)) ||
 					token.isCancellationRequested
 				) {
 					return;

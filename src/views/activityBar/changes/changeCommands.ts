@@ -85,7 +85,7 @@ export async function checkoutBranch(
 			});
 
 			const success = await gitCheckoutRemote(
-				gerritRepo,
+				gerritRepo.rootUri.fsPath,
 				changeTreeView.initialChange.changeID,
 				undefined,
 				true
