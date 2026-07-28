@@ -279,7 +279,9 @@ export async function recursiveRebase(gerritRepo: Repository): Promise<void> {
 				message: 'Getting current branch',
 				increment: getRelativeProgress(12.5),
 			});
-			const initialBranch = await getCurrentBranch(gerritRepo);
+			const initialBranch = await getCurrentBranch(
+				gerritRepo.rootUri.fsPath
+			);
 			if (!initialBranch) {
 				void window.showErrorMessage(
 					'Failed to get current branch, aborting'

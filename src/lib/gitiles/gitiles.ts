@@ -28,7 +28,7 @@ export async function openOnGitiles(
 		gitReviewFile.defaultbranch ??
 		DEFAULT_GIT_REVIEW_FILE.branch;
 
-	const branch = await getCurrentBranch(gerritRepo);
+	const branch = await getCurrentBranch(gerritRepo.rootUri.fsPath);
 
 	let project = gitReviewFile.project;
 	if (project.endsWith('.git')) {
