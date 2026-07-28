@@ -18,10 +18,6 @@ function arePathsEqual(firstPath: string, secondPath: string): boolean {
 	);
 }
 
-function normalizeBranchName(branch: string): string {
-	return branch.trim().replace(/^refs\/heads\//, '');
-}
-
 /**
  * List every local branch together with its upstream and the worktree it is
  * checked out in (if any), using a single tab-delimited git call.
@@ -105,8 +101,7 @@ export async function resolveWorktreePath(
 		return repoPath;
 	}
 
-	const wantedUpstream =
-		GIT_REMOTE_PREFIX + normalizeBranchName(targetBranch);
+	const wantedUpstream = GIT_REMOTE_PREFIX + targetBranch.trim();
 	if (wantedUpstream === VIEWTOP_UPSTREAM) {
 		return repoPath;
 	}
